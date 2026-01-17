@@ -11,7 +11,7 @@ import (
 
 func TestAuthMiddlewareSetsUser(t *testing.T) {
 	secret := "test-secret"
-	token, err := auth.GenerateToken(secret, auth.Claims{UserID: "u1", TenantID: "t1", RoleID: "r1", RoleName: "HR"}, time.Hour)
+	token, err := auth.GenerateToken(secret, auth.Claims{UserID: "u1", TenantID: "t1", RoleID: "r1", RoleName: auth.RoleHR}, time.Hour)
 	if err != nil {
 		t.Fatalf("token error: %v", err)
 	}
@@ -21,7 +21,7 @@ func TestAuthMiddlewareSetsUser(t *testing.T) {
 		if !ok {
 			t.Fatal("expected user in context")
 		}
-		if user.UserID != "u1" || user.RoleName != "HR" {
+		if user.UserID != "u1" || user.RoleName != auth.RoleHR {
 			t.Fatalf("unexpected user: %+v", user)
 		}
 	}))

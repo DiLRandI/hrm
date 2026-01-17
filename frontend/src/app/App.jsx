@@ -10,6 +10,7 @@ import Performance from '../features/performance/pages/Performance.jsx';
 import GDPR from '../features/gdpr/pages/GDPR.jsx';
 import Reports from '../features/reports/pages/Reports.jsx';
 import Notifications from '../features/notifications/pages/Notifications.jsx';
+import { ROLE_EMPLOYEE } from '../shared/constants/roles.js';
 
 function AppShell() {
   const { user, logout } = useAuth();
@@ -18,7 +19,7 @@ function AppShell() {
     return <Navigate to="/login" replace />;
   }
 
-  const role = user?.role || user?.RoleName || 'Employee';
+  const role = user?.role || user?.RoleName || ROLE_EMPLOYEE;
 
   return (
     <div className="app-shell">

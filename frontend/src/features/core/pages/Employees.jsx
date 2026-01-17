@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
+import { ROLE_HR } from '../../../shared/constants/roles.js';
 
 export default function Employees() {
   const { user } = useAuth();
@@ -49,7 +50,7 @@ export default function Employees() {
 
       {error && <div className="error">{error}</div>}
 
-      {(user?.role || user?.RoleName) === 'HR' && (
+      {(user?.role || user?.RoleName) === ROLE_HR && (
         <form className="inline-form" onSubmit={handleSubmit}>
           <input placeholder="First name" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
           <input placeholder="Last name" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />

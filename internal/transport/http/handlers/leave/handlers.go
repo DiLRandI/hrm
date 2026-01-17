@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/leave"
+	"hrm/internal/domain/auth"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
@@ -77,7 +78,7 @@ func (h *Handler) handleCreateType(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -137,7 +138,7 @@ func (h *Handler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -220,7 +221,7 @@ func (h *Handler) handleAdjustBalance(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -258,13 +259,13 @@ func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
   `
 	args := []any{user.TenantID}
 
-	if user.RoleName == "Employee" {
+	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
 		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
 		query += " AND employee_id = $2"
 		args = append(args, employeeID)
 	}
-	if user.RoleName == "Manager" {
+	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
 		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
 		query += " AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $2)"
@@ -313,7 +314,7 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		var selfEmployeeID string
 		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID)
 		payload.EmployeeID = selfEmployeeID
@@ -362,7 +363,7 @@ func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "Manager" && user.RoleName != "HR" {
+	if user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "manager or hr required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -381,8 +382,8 @@ func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = h.DB.Exec(r.Context(), `
-    UPDATE leave_requests SET status = 'approved', approved_by = $1, approved_at = now() WHERE id = $2
-  `, user.UserID, requestID)
+    UPDATE leave_requests SET status = $1, approved_by = $2, approved_at = now() WHERE id = $3
+  `, leave.StatusApproved, user.UserID, requestID)
 
 	_, _ = h.DB.Exec(r.Context(), `
     UPDATE leave_balances
@@ -390,7 +391,7 @@ func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
   `, days, user.TenantID, employeeID, leaveTypeID)
 
-	api.Success(w, map[string]string{"status": "approved"}, middleware.GetRequestID(r.Context()))
+	api.Success(w, map[string]string{"status": leave.StatusApproved}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
@@ -399,7 +400,7 @@ func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "Manager" && user.RoleName != "HR" {
+	if user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "manager or hr required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -418,8 +419,8 @@ func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, _ = h.DB.Exec(r.Context(), `
-    UPDATE leave_requests SET status = 'rejected', approved_by = $1, approved_at = now() WHERE id = $2
-  `, user.UserID, requestID)
+    UPDATE leave_requests SET status = $1, approved_by = $2, approved_at = now() WHERE id = $3
+  `, leave.StatusRejected, user.UserID, requestID)
 
 	_, _ = h.DB.Exec(r.Context(), `
     UPDATE leave_balances
@@ -427,7 +428,7 @@ func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
   `, days, user.TenantID, employeeID, leaveTypeID)
 
-	api.Success(w, map[string]string{"status": "rejected"}, middleware.GetRequestID(r.Context()))
+	api.Success(w, map[string]string{"status": leave.StatusRejected}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleCancelRequest(w http.ResponseWriter, r *http.Request) {
@@ -451,14 +452,14 @@ func (h *Handler) handleCancelRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if status == "approved" {
+	if status == leave.StatusApproved {
 		api.Fail(w, http.StatusBadRequest, "invalid_state", "approved requests require HR cancellation", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	_, _ = h.DB.Exec(r.Context(), `
-    UPDATE leave_requests SET status = 'cancelled', cancelled_at = now() WHERE id = $1
-  `, requestID)
+    UPDATE leave_requests SET status = $1, cancelled_at = now() WHERE id = $2
+  `, leave.StatusCancelled, requestID)
 
 	_, _ = h.DB.Exec(r.Context(), `
     UPDATE leave_balances
@@ -466,7 +467,7 @@ func (h *Handler) handleCancelRequest(w http.ResponseWriter, r *http.Request) {
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
   `, days, user.TenantID, employeeID, leaveTypeID)
 
-	api.Success(w, map[string]string{"status": "cancelled"}, middleware.GetRequestID(r.Context()))
+	api.Success(w, map[string]string{"status": leave.StatusCancelled}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleCalendar(w http.ResponseWriter, r *http.Request) {
@@ -479,8 +480,8 @@ func (h *Handler) handleCalendar(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
     SELECT id, employee_id, leave_type_id, start_date, end_date, status
     FROM leave_requests
-    WHERE tenant_id = $1 AND status IN ('pending','approved')
-  `, user.TenantID)
+    WHERE tenant_id = $1 AND status = ANY($2)
+  `, user.TenantID, []string{leave.StatusPending, leave.StatusApproved})
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "calendar_failed", "failed to load calendar", middleware.GetRequestID(r.Context()))
 		return
@@ -554,9 +555,9 @@ func (h *Handler) handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
     SELECT leave_type_id, SUM(days)
     FROM leave_requests
-    WHERE tenant_id = $1 AND status = 'approved'
+    WHERE tenant_id = $1 AND status = $2
     GROUP BY leave_type_id
-  `, user.TenantID)
+  `, user.TenantID, leave.StatusApproved)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "report_failed", "failed to load report", middleware.GetRequestID(r.Context()))
 		return

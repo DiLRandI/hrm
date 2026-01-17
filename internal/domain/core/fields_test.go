@@ -17,7 +17,7 @@ func sampleEmployee() *Employee {
 
 func TestFilterEmployeeFieldsHR(t *testing.T) {
 	emp := sampleEmployee()
-	user := auth.UserContext{RoleName: "HR"}
+	user := auth.UserContext{RoleName: auth.RoleHR}
 
 	FilterEmployeeFields(emp, user, false, false)
 
@@ -28,7 +28,7 @@ func TestFilterEmployeeFieldsHR(t *testing.T) {
 
 func TestFilterEmployeeFieldsManager(t *testing.T) {
 	emp := sampleEmployee()
-	user := auth.UserContext{RoleName: "Manager"}
+	user := auth.UserContext{RoleName: auth.RoleManager}
 
 	FilterEmployeeFields(emp, user, false, true)
 
@@ -39,7 +39,7 @@ func TestFilterEmployeeFieldsManager(t *testing.T) {
 
 func TestFilterEmployeeFieldsEmployeeSelf(t *testing.T) {
 	emp := sampleEmployee()
-	user := auth.UserContext{RoleName: "Employee"}
+	user := auth.UserContext{RoleName: auth.RoleEmployee}
 
 	FilterEmployeeFields(emp, user, true, false)
 

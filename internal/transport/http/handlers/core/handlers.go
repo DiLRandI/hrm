@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"hrm/internal/domain/core"
+	"hrm/internal/domain/auth"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 )
@@ -73,7 +74,7 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var managerEmployeeID string
-	if user.RoleName == "Manager" {
+	if user.RoleName == auth.RoleManager {
 		managerEmp, err := h.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 		if err == nil {
 			managerEmployeeID = managerEmp.ID
@@ -82,10 +83,10 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 
 	filtered := make([]core.Employee, 0, len(employees))
 	for _, emp := range employees {
-		if user.RoleName == "Manager" && managerEmployeeID != "" && emp.ManagerID != managerEmployeeID && emp.UserID != user.UserID {
+		if user.RoleName == auth.RoleManager && managerEmployeeID != "" && emp.ManagerID != managerEmployeeID && emp.UserID != user.UserID {
 			continue
 		}
-		if user.RoleName == "Employee" && emp.UserID != user.UserID {
+		if user.RoleName == auth.RoleEmployee && emp.UserID != user.UserID {
 			continue
 		}
 
@@ -120,11 +121,11 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 	managerEmp, _ := h.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 	isSelf := emp.UserID == user.UserID
 	isManager := managerEmp != nil && emp.ManagerID == managerEmp.ID
-	if user.RoleName == "Employee" && !isSelf {
+	if user.RoleName == auth.RoleEmployee && !isSelf {
 		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName == "Manager" && !isSelf && !isManager {
+	if user.RoleName == auth.RoleManager && !isSelf && !isManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -139,7 +140,7 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -179,7 +180,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		if existing.UserID != user.UserID {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 			return
@@ -246,7 +247,7 @@ func (h *Handler) handleCreateDepartment(w http.ResponseWriter, r *http.Request)
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}

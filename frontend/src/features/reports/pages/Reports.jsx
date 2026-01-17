@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
+import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
 
 export default function Reports() {
   const { user } = useAuth();
@@ -10,9 +11,9 @@ export default function Reports() {
   useEffect(() => {
     const load = async () => {
       try {
-        if ((user?.role || user?.RoleName) === 'HR') {
+        if ((user?.role || user?.RoleName) === ROLE_HR) {
           setData(await api.get('/reports/dashboard/hr'));
-        } else if ((user?.role || user?.RoleName) === 'Manager') {
+        } else if ((user?.role || user?.RoleName) === ROLE_MANAGER) {
           setData(await api.get('/reports/dashboard/manager'));
         } else {
           setData(await api.get('/reports/dashboard/employee'));

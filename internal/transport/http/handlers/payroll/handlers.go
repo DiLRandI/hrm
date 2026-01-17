@@ -8,6 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"hrm/internal/domain/auth"
+	"hrm/internal/domain/core"
 	"hrm/internal/domain/payroll"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
@@ -104,7 +106,7 @@ func (h *Handler) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -115,7 +117,7 @@ func (h *Handler) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id string
-	err = h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRow(r.Context(), `
     INSERT INTO pay_schedules (tenant_id, name, frequency, pay_day)
     VALUES ($1,$2,$3,$4)
     RETURNING id
@@ -162,7 +164,7 @@ func (h *Handler) handleCreateElement(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -174,7 +176,7 @@ func (h *Handler) handleCreateElement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id string
-	err = h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRow(r.Context(), `
     INSERT INTO pay_elements (tenant_id, name, element_type, calc_type, amount, taxable)
     VALUES ($1,$2,$3,$4,$5,$6)
     RETURNING id
@@ -223,7 +225,7 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -246,7 +248,7 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id string
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(r.Context(), `
     INSERT INTO payroll_periods (tenant_id, schedule_id, start_date, end_date)
     VALUES ($1,$2,$3,$4)
     RETURNING id
@@ -305,7 +307,7 @@ func (h *Handler) handleCreateInput(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -339,7 +341,7 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -349,8 +351,8 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
     SELECT id, salary, currency
     FROM employees
-    WHERE tenant_id = $1 AND status = 'active'
-  `, user.TenantID)
+    WHERE tenant_id = $1 AND status = $2
+  `, user.TenantID, core.EmployeeStatusActive)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to load employees", middleware.GetRequestID(r.Context()))
 		return
@@ -408,7 +410,7 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -425,8 +427,8 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 	}
 
 	_, err := h.DB.Exec(r.Context(), `
-    UPDATE payroll_periods SET status = 'finalized', finalized_at = now() WHERE id = $1 AND tenant_id = $2
-  `, periodID, user.TenantID)
+    UPDATE payroll_periods SET status = $1, finalized_at = now() WHERE id = $2 AND tenant_id = $3
+  `, payroll.PeriodStatusFinalized, periodID, user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_finalize_failed", "failed to finalize payroll", middleware.GetRequestID(r.Context()))
 		return
@@ -440,7 +442,7 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
     ON CONFLICT DO NOTHING
   `, periodID)
 
-	response := map[string]string{"status": "finalized"}
+	response := map[string]string{"status": payroll.PeriodStatusFinalized}
 	payload, _ := json.Marshal(response)
 	if idempotencyKey != "" {
 		_ = middleware.SaveIdempotency(r.Context(), h.DB, user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash, payload)

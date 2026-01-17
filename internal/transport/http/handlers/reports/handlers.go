@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"hrm/internal/domain/leave"
 	"hrm/internal/domain/reports"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
@@ -60,7 +61,7 @@ func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request)
 	_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
 
 	var pendingApprovals int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = 'pending'", user.TenantID).Scan(&pendingApprovals)
+	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = $2", user.TenantID, leave.StatusPending).Scan(&pendingApprovals)
 
 	var teamGoals int
 	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&teamGoals)
@@ -82,7 +83,7 @@ func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
 	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&payrollPeriods)
 
 	var leavePending int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = 'pending'", user.TenantID).Scan(&leavePending)
+	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = $2", user.TenantID, leave.StatusPending).Scan(&leavePending)
 
 	var reviewCycles int
 	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_cycles WHERE tenant_id = $1", user.TenantID).Scan(&reviewCycles)

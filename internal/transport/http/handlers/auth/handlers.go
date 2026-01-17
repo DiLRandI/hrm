@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/core"
 	"hrm/internal/platform/requestctx"
 	"hrm/internal/transport/http/api"
 )
@@ -51,8 +52,8 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
     SELECT u.id, u.tenant_id, u.role_id, r.name, u.password_hash
     FROM users u
     JOIN roles r ON u.role_id = r.id
-    WHERE u.email = $1 AND u.status = 'active'
-  `, payload.Email).Scan(&id, &tenantID, &roleID, &roleName, &hash)
+    WHERE u.email = $1 AND u.status = $2
+  `, payload.Email, core.UserStatusActive).Scan(&id, &tenantID, &roleID, &roleName, &hash)
 	if err != nil {
 		api.Fail(w, http.StatusUnauthorized, "invalid_credentials", "invalid credentials", requestctx.GetRequestID(r.Context()))
 		return

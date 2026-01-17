@@ -3,13 +3,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import Dashboard from './Dashboard.jsx';
 import { api } from '../../../services/apiClient.js';
+import { ROLE_HR } from '../../../shared/constants/roles.js';
 
 vi.mock('../../../services/apiClient.js', () => ({
   api: { get: vi.fn() },
 }));
 
 vi.mock('../../auth/auth.jsx', () => ({
-  useAuth: () => ({ user: { role: 'HR' }, employee: { firstName: 'Ava' } }),
+  useAuth: () => ({ user: { role: ROLE_HR }, employee: { firstName: 'Ava' } }),
 }));
 
 describe('Dashboard', () => {

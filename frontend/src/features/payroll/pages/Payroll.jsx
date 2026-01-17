@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
+import { ROLE_HR } from '../../../shared/constants/roles.js';
 
 export default function Payroll() {
   const { user, employee } = useAuth();
@@ -59,7 +60,7 @@ export default function Payroll() {
 
       {error && <div className="error">{error}</div>}
 
-      {(user?.role || user?.RoleName) === 'HR' && (
+      {(user?.role || user?.RoleName) === ROLE_HR && (
         <form className="inline-form" onSubmit={createPeriod}>
           <input placeholder="Schedule ID" value={form.scheduleId} onChange={(e) => setForm({ ...form, scheduleId: e.target.value })} />
           <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
@@ -79,7 +80,7 @@ export default function Payroll() {
             <span>{period.startDate?.slice(0, 10)} → {period.endDate?.slice(0, 10)}</span>
             <span>{period.status}</span>
             <span className="row-actions">
-              {(user?.role || user?.RoleName) === 'HR' && (
+              {(user?.role || user?.RoleName) === ROLE_HR && (
                 <>
                   <button onClick={() => runPayroll(period.id)}>Run</button>
                   <button onClick={() => finalizePayroll(period.id)}>Finalize</button>

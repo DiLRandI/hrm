@@ -47,7 +47,7 @@ var DefaultPermissions = []string{
 }
 
 var RolePermissions = map[string][]string{
-	"Employee": {
+	RoleEmployee: {
 		PermEmployeesRead,
 		PermOrgRead,
 		PermLeaveRead,
@@ -57,7 +57,7 @@ var RolePermissions = map[string][]string{
 		PermPerformanceWrite,
 		PermReportsRead,
 	},
-	"Manager": {
+	RoleManager: {
 		PermEmployeesRead,
 		PermOrgRead,
 		PermLeaveRead,
@@ -69,7 +69,7 @@ var RolePermissions = map[string][]string{
 		PermPerformanceReview,
 		PermReportsRead,
 	},
-	"HR": {
+	RoleHR: {
 		PermEmployeesRead,
 		PermEmployeesWrite,
 		PermOrgRead,
@@ -90,7 +90,7 @@ var RolePermissions = map[string][]string{
 		PermGDPRRetention,
 		PermAuditRead,
 	},
-	"SystemAdmin": {
+	RoleSystemAdmin: {
 		PermSystemAdmin,
 	},
 }

@@ -22,7 +22,7 @@ func TestHashAndCheckPassword(t *testing.T) {
 
 func TestGenerateAndParseToken(t *testing.T) {
 	secret := "test-secret"
-	claims := Claims{UserID: "u1", TenantID: "t1", RoleID: "r1", RoleName: "HR"}
+	claims := Claims{UserID: "u1", TenantID: "t1", RoleID: "r1", RoleName: RoleHR}
 
 	token, err := GenerateToken(secret, claims, time.Hour)
 	if err != nil {

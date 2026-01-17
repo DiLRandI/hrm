@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/performance"
+	"hrm/internal/domain/auth"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
@@ -181,7 +182,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -481,7 +482,7 @@ func (h *Handler) handleCreatePIP(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" && user.RoleName != "Manager" {
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "manager or hr required", middleware.GetRequestID(r.Context()))
 		return
 	}

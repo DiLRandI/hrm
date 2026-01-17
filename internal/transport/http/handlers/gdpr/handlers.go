@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/gdpr"
+	"hrm/internal/domain/auth"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 )
@@ -77,7 +78,7 @@ func (h *Handler) handleCreateRetention(w http.ResponseWriter, r *http.Request) 
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -162,9 +163,9 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 	var id string
 	err := h.DB.QueryRow(r.Context(), `
     INSERT INTO dsar_exports (tenant_id, employee_id, requested_by, status)
-    VALUES ($1,$2,$3,'processing')
+    VALUES ($1,$2,$3,$4)
     RETURNING id
-  `, user.TenantID, payload.EmployeeID, user.UserID).Scan(&id)
+  `, user.TenantID, payload.EmployeeID, user.UserID, gdpr.DSARStatusProcessing).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "dsar_request_failed", "failed to request dsar", middleware.GetRequestID(r.Context()))
 		return
@@ -173,11 +174,11 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 	fileURL, err := h.generateDSAR(r.Context(), user.TenantID, payload.EmployeeID, id)
 	if err == nil {
 		_, _ = h.DB.Exec(r.Context(), `
-      UPDATE dsar_exports SET status = 'completed', file_url = $1, completed_at = now() WHERE id = $2
-    `, fileURL, id)
+      UPDATE dsar_exports SET status = $1, file_url = $2, completed_at = now() WHERE id = $3
+    `, gdpr.DSARStatusCompleted, fileURL, id)
 	}
 
-	api.Created(w, map[string]string{"id": id, "status": "processing"}, middleware.GetRequestID(r.Context()))
+	api.Created(w, map[string]string{"id": id, "status": gdpr.DSARStatusProcessing}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) generateDSAR(ctx context.Context, tenantID, employeeID, exportID string) (string, error) {
@@ -259,7 +260,7 @@ func (h *Handler) handleRequestAnonymization(w http.ResponseWriter, r *http.Requ
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -276,15 +277,15 @@ func (h *Handler) handleRequestAnonymization(w http.ResponseWriter, r *http.Requ
 	var id string
 	err := h.DB.QueryRow(r.Context(), `
     INSERT INTO anonymization_jobs (tenant_id, employee_id, status, reason)
-    VALUES ($1,$2,'requested',$3)
+    VALUES ($1,$2,$3,$4)
     RETURNING id
-  `, user.TenantID, payload.EmployeeID, payload.Reason).Scan(&id)
+  `, user.TenantID, payload.EmployeeID, gdpr.AnonymizationRequested, payload.Reason).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "anonymize_request_failed", "failed to request anonymization", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	api.Created(w, map[string]string{"id": id, "status": "requested"}, middleware.GetRequestID(r.Context()))
+	api.Created(w, map[string]string{"id": id, "status": gdpr.AnonymizationRequested}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +294,7 @@ func (h *Handler) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != "HR" {
+	if user.RoleName != auth.RoleHR {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}

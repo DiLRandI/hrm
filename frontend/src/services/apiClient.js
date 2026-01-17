@@ -1,14 +1,15 @@
-const API_BASE = '/api/v1';
+import { API_BASE } from '../shared/constants/api.js';
+import { TOKEN_STORAGE_KEY } from '../shared/constants/storage.js';
 
 export function getToken() {
-  return localStorage.getItem('hrm_token');
+  return localStorage.getItem(TOKEN_STORAGE_KEY);
 }
 
 export function setToken(token) {
   if (token) {
-    localStorage.setItem('hrm_token', token);
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
   } else {
-    localStorage.removeItem('hrm_token');
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
   }
 }
 
