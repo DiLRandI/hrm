@@ -29,11 +29,36 @@ func (s *Store) HasPermission(ctx context.Context, roleID, permission string) (b
 	return count > 0, nil
 }
 
+func (s *Store) UserExists(ctx context.Context, tenantID, userID string) (bool, error) {
+	var count int
+	err := s.DB.QueryRow(ctx, `
+    SELECT COUNT(1)
+    FROM users
+    WHERE tenant_id = $1 AND id = $2
+  `, tenantID, userID).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (s *Store) GetEmployee(ctx context.Context, tenantID, employeeID string) (*Employee, error) {
 	row := s.DB.QueryRow(ctx, `
-    SELECT id, user_id, employee_number, first_name, last_name, email, phone, date_of_birth,
-           address, national_id, bank_account, salary, currency, employment_type,
-           department_id, manager_id, start_date, end_date, status, created_at, updated_at
+    SELECT id,
+           COALESCE(user_id::text, ''),
+           COALESCE(employee_number, ''),
+           first_name, last_name, email,
+           COALESCE(phone, ''),
+           date_of_birth,
+           COALESCE(address, ''),
+           COALESCE(national_id, ''),
+           COALESCE(bank_account, ''),
+           salary,
+           currency,
+           COALESCE(employment_type, ''),
+           COALESCE(department_id::text, ''),
+           COALESCE(manager_id::text, ''),
+           start_date, end_date, status, created_at, updated_at
     FROM employees
     WHERE tenant_id = $1 AND id = $2
   `, tenantID, employeeID)
@@ -53,9 +78,21 @@ func (s *Store) GetEmployee(ctx context.Context, tenantID, employeeID string) (*
 
 func (s *Store) GetEmployeeByUserID(ctx context.Context, tenantID, userID string) (*Employee, error) {
 	row := s.DB.QueryRow(ctx, `
-    SELECT id, user_id, employee_number, first_name, last_name, email, phone, date_of_birth,
-           address, national_id, bank_account, salary, currency, employment_type,
-           department_id, manager_id, start_date, end_date, status, created_at, updated_at
+    SELECT id,
+           COALESCE(user_id::text, ''),
+           COALESCE(employee_number, ''),
+           first_name, last_name, email,
+           COALESCE(phone, ''),
+           date_of_birth,
+           COALESCE(address, ''),
+           COALESCE(national_id, ''),
+           COALESCE(bank_account, ''),
+           salary,
+           currency,
+           COALESCE(employment_type, ''),
+           COALESCE(department_id::text, ''),
+           COALESCE(manager_id::text, ''),
+           start_date, end_date, status, created_at, updated_at
     FROM employees
     WHERE tenant_id = $1 AND user_id = $2
   `, tenantID, userID)
@@ -87,9 +124,21 @@ func (s *Store) IsManagerOf(ctx context.Context, tenantID, managerEmployeeID, em
 
 func (s *Store) ListEmployees(ctx context.Context, tenantID string) ([]Employee, error) {
 	rows, err := s.DB.Query(ctx, `
-    SELECT id, user_id, employee_number, first_name, last_name, email, phone, date_of_birth,
-           address, national_id, bank_account, salary, currency, employment_type,
-           department_id, manager_id, start_date, end_date, status, created_at, updated_at
+    SELECT id,
+           COALESCE(user_id::text, ''),
+           COALESCE(employee_number, ''),
+           first_name, last_name, email,
+           COALESCE(phone, ''),
+           date_of_birth,
+           COALESCE(address, ''),
+           COALESCE(national_id, ''),
+           COALESCE(bank_account, ''),
+           salary,
+           currency,
+           COALESCE(employment_type, ''),
+           COALESCE(department_id::text, ''),
+           COALESCE(manager_id::text, ''),
+           start_date, end_date, status, created_at, updated_at
     FROM employees
     WHERE tenant_id = $1
     ORDER BY last_name, first_name

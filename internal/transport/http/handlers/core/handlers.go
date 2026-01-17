@@ -2,12 +2,14 @@ package corehandler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
-	"hrm/internal/domain/core"
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/core"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 )
@@ -39,6 +41,12 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	exists, err := h.Store.UserExists(r.Context(), user.TenantID, user.UserID)
+	if err != nil || !exists {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -150,9 +158,17 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if payload.Status == "" {
+		payload.Status = core.EmployeeStatusActive
+	}
 
 	id, err := h.Store.CreateEmployee(r.Context(), user.TenantID, payload)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			api.Fail(w, http.StatusConflict, "employee_exists", "employee email already exists", middleware.GetRequestID(r.Context()))
+			return
+		}
 		api.Fail(w, http.StatusInternalServerError, "employee_create_failed", "failed to create employee", middleware.GetRequestID(r.Context()))
 		return
 	}

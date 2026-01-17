@@ -8,8 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/domain/performance"
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/performance"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
@@ -92,6 +92,14 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if payload.EmployeeID == "" {
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID)
+	}
+	if payload.EmployeeID == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id required", middleware.GetRequestID(r.Context()))
 		return
 	}
 

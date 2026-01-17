@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/domain/gdpr"
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/gdpr"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 )

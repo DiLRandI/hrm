@@ -1,7 +1,7 @@
 package gdpr
 
 const (
-	DSARStatusProcessing = "processing"
-	DSARStatusCompleted  = "completed"
+	DSARStatusProcessing   = "processing"
+	DSARStatusCompleted    = "completed"
 	AnonymizationRequested = "requested"
 )

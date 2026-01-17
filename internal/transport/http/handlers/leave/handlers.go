@@ -8,8 +8,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/domain/leave"
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/leave"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
@@ -311,6 +311,10 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	var payload leaveRequestPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if payload.LeaveTypeID == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "leave type required", middleware.GetRequestID(r.Context()))
 		return
 	}
 

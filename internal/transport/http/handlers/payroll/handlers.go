@@ -235,6 +235,10 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if payload.ScheduleID == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "schedule id required", middleware.GetRequestID(r.Context()))
+		return
+	}
 
 	startDate, err := shared.ParseDate(payload.StartDate)
 	if err != nil || startDate.IsZero() {
@@ -461,6 +465,10 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 	employeeID := r.URL.Query().Get("employeeId")
 	if employeeID == "" {
 		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+	}
+	if employeeID == "" {
+		api.Success(w, []map[string]any{}, middleware.GetRequestID(r.Context()))
+		return
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
