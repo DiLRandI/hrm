@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { api, setToken } from './api';
+import { api, setToken } from './apiClient.js';
 
 const mockResponse = (payload, ok = true) => ({
   ok,

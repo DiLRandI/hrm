@@ -21,27 +21,6 @@ func NewHandler(db *pgxpool.Pool) *Handler {
 	return &Handler{DB: db}
 }
 
-type performance.Goal struct {
-	ID          string    `json:"id"`
-	EmployeeID  string    `json:"employeeId"`
-	ManagerID   string    `json:"managerId"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Metric      string    `json:"metric"`
-	DueDate     time.Time `json:"dueDate"`
-	Weight      float64   `json:"weight"`
-	Status      string    `json:"status"`
-	Progress    float64   `json:"progress"`
-}
-
-type performance.ReviewCycle struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
-	Status    string    `json:"status"`
-}
-
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/performance", func(r chi.Router) {
 		r.Get("/goals", h.handleListGoals)
@@ -297,9 +276,9 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 	var feedbacks []map[string]any
 	for rows.Next() {
 		var id, fromUser, toEmployee, ftype, message string
-		var relatedperformance.Goal any
+		var relatedGoal any
 		var created time.Time
-		if err := rows.Scan(&id, &fromUser, &toEmployee, &ftype, &message, &relatedperformance.Goal, &created); err != nil {
+		if err := rows.Scan(&id, &fromUser, &toEmployee, &ftype, &message, &relatedGoal, &created); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "feedback_list_failed", "failed to list feedback", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -309,7 +288,7 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 			"toEmployeeId":  toEmployee,
 			"type":          ftype,
 			"message":       message,
-			"relatedperformance.GoalId": relatedperformance.Goal,
+			"relatedGoalId": relatedGoal,
 			"createdAt":     created,
 		})
 	}
@@ -327,7 +306,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 		ToEmployeeID string `json:"toEmployeeId"`
 		Type         string `json:"type"`
 		Message      string `json:"message"`
-		Relatedperformance.Goal  string `json:"relatedperformance.GoalId"`
+		RelatedGoal  string `json:"relatedGoalId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
@@ -337,7 +316,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 	_, err := h.DB.Exec(r.Context(), `
     INSERT INTO feedback (tenant_id, from_user_id, to_employee_id, type, message, related_goal_id)
     VALUES ($1,$2,$3,$4,$5,$6)
-  `, user.TenantID, user.UserID, payload.ToEmployeeID, payload.Type, payload.Message, nullIfEmpty(payload.Relatedperformance.Goal))
+  `, user.TenantID, user.UserID, payload.ToEmployeeID, payload.Type, payload.Message, nullIfEmpty(payload.RelatedGoal))
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "feedback_create_failed", "failed to create feedback", middleware.GetRequestID(r.Context()))
 		return

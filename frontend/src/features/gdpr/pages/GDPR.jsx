@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../api.js';
+import { api } from '../../../services/apiClient.js';
 
 export default function GDPR() {
   const [dsars, setDsars] = useState([]);

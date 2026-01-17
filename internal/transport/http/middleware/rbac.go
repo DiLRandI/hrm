@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"hrm/internal/api"
+	"hrm/internal/transport/http/api"
 )
 
 type PermissionStore interface {

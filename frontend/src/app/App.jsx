@@ -1,15 +1,15 @@
 import React from 'react';
 import { Routes, Route, Navigate, NavLink } from 'react-router-dom';
-import { AuthProvider, useAuth } from './auth.jsx';
-import Login from './pages/Login.jsx';
-import Dashboard from './pages/Dashboard.jsx';
-import Employees from './pages/Employees.jsx';
-import Leave from './pages/Leave.jsx';
-import Payroll from './pages/Payroll.jsx';
-import Performance from './pages/Performance.jsx';
-import GDPR from './pages/GDPR.jsx';
-import Reports from './pages/Reports.jsx';
-import Notifications from './pages/Notifications.jsx';
+import { AuthProvider, useAuth } from '../features/auth/auth.jsx';
+import Login from '../features/auth/pages/Login.jsx';
+import Dashboard from '../features/core/pages/Dashboard.jsx';
+import Employees from '../features/core/pages/Employees.jsx';
+import Leave from '../features/leave/pages/Leave.jsx';
+import Payroll from '../features/payroll/pages/Payroll.jsx';
+import Performance from '../features/performance/pages/Performance.jsx';
+import GDPR from '../features/gdpr/pages/GDPR.jsx';
+import Reports from '../features/reports/pages/Reports.jsx';
+import Notifications from '../features/notifications/pages/Notifications.jsx';
 
 function AppShell() {
   const { user, logout } = useAuth();

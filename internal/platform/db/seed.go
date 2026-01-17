@@ -7,8 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/auth"
-	"hrm/internal/config"
+	"hrm/internal/domain/auth"
+	"hrm/internal/platform/config"
 )
 
 func Seed(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) error {

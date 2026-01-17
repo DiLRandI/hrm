@@ -5,15 +5,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"hrm/internal/api"
-	"hrm/internal/middleware"
+	"hrm/internal/domain/notifications"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
-	Service *Service
+	Service *notifications.Service
 }
 
-func NewHandler(service *Service) *Handler {
+func NewHandler(service *notifications.Service) *Handler {
 	return &Handler{Service: service}
 }
 

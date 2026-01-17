@@ -6,7 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/config"
+	"hrm/internal/platform/config"
 )
 
 func Connect(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {

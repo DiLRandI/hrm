@@ -1,6 +1,6 @@
 package core
 
-import "hrm/internal/auth"
+import "hrm/internal/domain/auth"
 
 func FilterEmployeeFields(emp *Employee, user auth.UserContext, isSelf, isManager bool) {
 	if user.RoleName == "HR" {

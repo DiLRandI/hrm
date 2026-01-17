@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"hrm/internal/auth"
+	"hrm/internal/domain/auth"
 )
 
 func Auth(secret string) func(http.Handler) http.Handler {

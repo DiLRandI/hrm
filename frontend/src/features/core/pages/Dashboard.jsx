@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useAuth } from '../auth.jsx';
-import { api } from '../api.js';
+import { useAuth } from '../../auth/auth.jsx';
+import { api } from '../../../services/apiClient.js';
 
 export default function Dashboard() {
   const { user, employee } = useAuth();

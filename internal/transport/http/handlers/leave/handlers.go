@@ -121,7 +121,7 @@ func (h *Handler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	var policies []leave.LeavePolicy
 	for rows.Next() {
 		var p leave.LeavePolicy
-		if err := rows.Scan(&p.ID, &p.leave.LeaveTypeID, &p.AccrualRate, &p.AccrualPeriod, &p.Entitlement, &p.CarryOver, &p.AllowNegative); err != nil {
+		if err := rows.Scan(&p.ID, &p.LeaveTypeID, &p.AccrualRate, &p.AccrualPeriod, &p.Entitlement, &p.CarryOver, &p.AllowNegative); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "leave_policies_failed", "failed to list leave policies", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -152,7 +152,7 @@ func (h *Handler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
     INSERT INTO leave_policies (tenant_id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit, allow_negative)
     VALUES ($1,$2,$3,$4,$5,$6,$7)
     RETURNING id
-  `, user.TenantID, payload.leave.LeaveTypeID, payload.AccrualRate, payload.AccrualPeriod, payload.Entitlement, payload.CarryOver, payload.AllowNegative).Scan(&id)
+  `, user.TenantID, payload.LeaveTypeID, payload.AccrualRate, payload.AccrualPeriod, payload.Entitlement, payload.CarryOver, payload.AllowNegative).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "leave_policy_create_failed", "failed to create leave policy", middleware.GetRequestID(r.Context()))
 		return
@@ -208,7 +208,7 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 
 type adjustBalanceRequest struct {
 	EmployeeID  string  `json:"employeeId"`
-	leave.LeaveTypeID string  `json:"leaveTypeId"`
+	LeaveTypeID string  `json:"leaveTypeId"`
 	Amount      float64 `json:"amount"`
 	Reason      string  `json:"reason"`
 }
@@ -234,7 +234,7 @@ func (h *Handler) handleAdjustBalance(w http.ResponseWriter, r *http.Request) {
     INSERT INTO leave_balances (tenant_id, employee_id, leave_type_id, balance, pending, used)
     VALUES ($1,$2,$3,$4,0,0)
     ON CONFLICT (employee_id, leave_type_id) DO UPDATE SET balance = leave_balances.balance + EXCLUDED.balance, updated_at = now()
-  `, user.TenantID, payload.EmployeeID, payload.leave.LeaveTypeID, payload.Amount)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.Amount)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "leave_adjust_failed", "failed to adjust balance", middleware.GetRequestID(r.Context()))
 		return
@@ -282,7 +282,7 @@ func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	var requests []leave.LeaveRequest
 	for rows.Next() {
 		var req leave.LeaveRequest
-		if err := rows.Scan(&req.ID, &req.EmployeeID, &req.leave.LeaveTypeID, &req.StartDate, &req.EndDate, &req.Days, &req.Reason, &req.Status, &req.CreatedAt); err != nil {
+		if err := rows.Scan(&req.ID, &req.EmployeeID, &req.LeaveTypeID, &req.StartDate, &req.EndDate, &req.Days, &req.Reason, &req.Status, &req.CreatedAt); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "leave_requests_failed", "failed to list requests", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -321,7 +321,7 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
     INSERT INTO leave_requests (tenant_id, employee_id, leave_type_id, start_date, end_date, days, reason)
     VALUES ($1,$2,$3,$4,$5,$6,$7)
     RETURNING id
-  `, user.TenantID, payload.EmployeeID, payload.leave.LeaveTypeID, payload.StartDate, payload.EndDate, days, payload.Reason).Scan(&id)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.StartDate, payload.EndDate, days, payload.Reason).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "leave_request_failed", "failed to create request", middleware.GetRequestID(r.Context()))
 		return
@@ -331,7 +331,7 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
     INSERT INTO leave_balances (tenant_id, employee_id, leave_type_id, balance, pending, used)
     VALUES ($1,$2,$3,0,$4,0)
     ON CONFLICT (employee_id, leave_type_id) DO UPDATE SET pending = leave_balances.pending + EXCLUDED.pending, updated_at = now()
-  `, user.TenantID, payload.EmployeeID, payload.leave.LeaveTypeID, days)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, days)
 
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }

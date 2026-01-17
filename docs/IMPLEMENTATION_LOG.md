@@ -24,3 +24,4 @@ Start: 2026-01-17
 - 2026-01-17: Added Makefile targets for dev, build, test, and Docker workflows.
 - 2026-01-17: Added backend unit tests for auth, RBAC permissions, field filtering, leave/day calculation, payroll computation, GDPR payload assembly, reports dashboards, and middleware utilities.
 - 2026-01-17: Added frontend unit tests with Vitest and Testing Library (API client, login flow, dashboard fetch).
+- 2026-01-17: Refactored Go backend into domain/platform/transport layers and restructured React frontend into app/features/services/shared layout.

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../api.js';
-import { useAuth } from '../auth.jsx';
+import { api } from '../../../services/apiClient.js';
+import { useAuth } from '../../auth/auth.jsx';
 
 export default function Reports() {
   const { user } = useAuth();

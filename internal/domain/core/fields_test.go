@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	"hrm/internal/auth"
+	"hrm/internal/domain/auth"
 )
 
 func sampleEmployee() *Employee {

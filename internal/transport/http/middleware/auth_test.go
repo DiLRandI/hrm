@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"hrm/internal/auth"
+	"hrm/internal/domain/auth"
 )
 
 func TestAuthMiddlewareSetsUser(t *testing.T) {

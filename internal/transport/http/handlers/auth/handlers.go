@@ -9,8 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/transport/http/api"
+	"hrm/internal/domain/auth"
 	"hrm/internal/platform/requestctx"
+	"hrm/internal/transport/http/api"
 )
 
 type Handler struct {
@@ -57,12 +58,12 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := CheckPassword(hash, payload.Password); err != nil {
+	if err := auth.CheckPassword(hash, payload.Password); err != nil {
 		api.Fail(w, http.StatusUnauthorized, "invalid_credentials", "invalid credentials", requestctx.GetRequestID(r.Context()))
 		return
 	}
 
-	token, err := GenerateToken(h.Secret, Claims{UserID: id, TenantID: tenantID, RoleID: roleID, RoleName: roleName}, 8*time.Hour)
+	token, err := auth.GenerateToken(h.Secret, auth.Claims{UserID: id, TenantID: tenantID, RoleID: roleID, RoleName: roleName}, 8*time.Hour)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "token_error", "failed to issue token", requestctx.GetRequestID(r.Context()))
 		return
@@ -116,7 +117,7 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := HashPassword(payload.NewPassword)
+	hash, err := auth.HashPassword(payload.NewPassword)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "hash_error", "failed to update password", requestctx.GetRequestID(r.Context()))
 		return
