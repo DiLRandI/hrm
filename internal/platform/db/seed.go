@@ -35,7 +35,9 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) error {
 	}
 
 	if cfg.SeedSystemAdminEmail != "" {
-		_ = ensureAdminUser(ctx, pool, tenantID, roleIDs[auth.RoleSystemAdmin], cfg.SeedSystemAdminEmail, cfg.SeedSystemAdminPassword)
+		if err := ensureAdminUser(ctx, pool, tenantID, roleIDs[auth.RoleSystemAdmin], cfg.SeedSystemAdminEmail, cfg.SeedSystemAdminPassword); err != nil {
+			return err
+		}
 	}
 
 	return nil

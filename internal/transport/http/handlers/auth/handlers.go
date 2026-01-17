@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"time"
 
@@ -65,12 +66,19 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sessionID := generateToken()
+	sessionID, err := generateToken()
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "token_error", "failed to issue token", requestctx.GetRequestID(r.Context()))
+		return
+	}
 	sessionExpires := time.Now().Add(8 * time.Hour)
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     INSERT INTO sessions (user_id, refresh_token, expires_at)
     VALUES ($1,$2,$3)
-  `, id, auth.HashToken(sessionID), sessionExpires)
+  `, id, auth.HashToken(sessionID), sessionExpires); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "session_error", "failed to start session", requestctx.GetRequestID(r.Context()))
+		return
+	}
 
 	token, err := auth.GenerateToken(h.Secret, auth.Claims{UserID: id, TenantID: tenantID, RoleID: roleID, RoleName: roleName, SessionID: sessionID}, 8*time.Hour)
 	if err != nil {
@@ -78,7 +86,9 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), "UPDATE users SET last_login = now() WHERE id = $1", id)
+	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET last_login = now() WHERE id = $1", id); err != nil {
+		log.Printf("update last_login failed for user %s: %v", id, err)
+	}
 
 	api.Success(w, map[string]any{
 		"token": token,
@@ -88,7 +98,9 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if user, ok := middleware.GetUser(r.Context()); ok && user.SessionID != "" {
-		_, _ = h.DB.Exec(r.Context(), "DELETE FROM sessions WHERE user_id = $1 AND refresh_token = $2", user.UserID, auth.HashToken(user.SessionID))
+		if _, err := h.DB.Exec(r.Context(), "DELETE FROM sessions WHERE user_id = $1 AND refresh_token = $2", user.UserID, auth.HashToken(user.SessionID)); err != nil {
+			log.Printf("logout session delete failed for user %s: %v", user.UserID, err)
+		}
 	}
 	api.Success(w, map[string]string{"status": "logged_out"}, requestctx.GetRequestID(r.Context()))
 }
@@ -103,10 +115,17 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 	var userID string
 	err := h.DB.QueryRow(r.Context(), "SELECT id FROM users WHERE email = $1", payload.Email).Scan(&userID)
 	if err == nil {
-		token := generateToken()
+		token, err := generateToken()
+		if err != nil {
+			log.Printf("password reset token generation failed for user %s: %v", userID, err)
+			api.Success(w, map[string]string{"status": "reset_requested"}, requestctx.GetRequestID(r.Context()))
+			return
+		}
 		expires := time.Now().Add(2 * time.Hour)
 		hashed := auth.HashToken(token)
-		_, _ = h.DB.Exec(r.Context(), "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, hashed, expires)
+		if _, err := h.DB.Exec(r.Context(), "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, hashed, expires); err != nil {
+			log.Printf("password reset insert failed for user %s: %v", userID, err)
+		}
 	}
 
 	api.Success(w, map[string]string{"status": "reset_requested"}, requestctx.GetRequestID(r.Context()))
@@ -136,14 +155,21 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), "UPDATE users SET password_hash = $1 WHERE id = $2", hash, userID)
-	_, _ = h.DB.Exec(r.Context(), "UPDATE password_resets SET used_at = now() WHERE token = $1", payload.Token)
+	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET password_hash = $1 WHERE id = $2", hash, userID); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "update_failed", "failed to update password", requestctx.GetRequestID(r.Context()))
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), "UPDATE password_resets SET used_at = now() WHERE token = $1", payload.Token); err != nil {
+		log.Printf("password reset mark used failed: %v", err)
+	}
 
 	api.Success(w, map[string]string{"status": "password_reset"}, requestctx.GetRequestID(r.Context()))
 }
 
-func generateToken() string {
+func generateToken() (string, error) {
 	buff := make([]byte, 32)
-	_, _ = rand.Read(buff)
-	return base64.RawURLEncoding.EncodeToString(buff)
+	if _, err := rand.Read(buff); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buff), nil
 }

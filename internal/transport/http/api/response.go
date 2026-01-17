@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 )
 
@@ -20,7 +21,9 @@ type Envelope struct {
 func WriteJSON(w http.ResponseWriter, status int, payload Envelope) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(payload)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("write json failed: %v", err)
+	}
 }
 
 func Success(w http.ResponseWriter, data any, requestID string) {

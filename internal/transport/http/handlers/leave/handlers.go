@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -110,7 +111,9 @@ func (h *Handler) handleCreateType(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusInternalServerError, "leave_type_create_failed", "failed to create leave type", middleware.GetRequestID(r.Context()))
 		return
 	}
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.type.create", "leave_type", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.type.create", "leave_type", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+		log.Printf("audit leave.type.create failed: %v", err)
+	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
 
@@ -171,7 +174,9 @@ func (h *Handler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusInternalServerError, "leave_policy_create_failed", "failed to create leave policy", middleware.GetRequestID(r.Context()))
 		return
 	}
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.policy.create", "leave_policy", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.policy.create", "leave_policy", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+		log.Printf("audit leave.policy.create failed: %v", err)
+	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
 
@@ -256,7 +261,9 @@ func (h *Handler) handleCreateHoliday(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.holiday.create", "holiday", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.holiday.create", "holiday", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+		log.Printf("audit leave.holiday.create failed: %v", err)
+	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
 
@@ -278,7 +285,9 @@ func (h *Handler) handleDeleteHoliday(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.holiday.delete", "holiday", holidayID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.holiday.delete", "holiday", holidayID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
+		log.Printf("audit leave.holiday.delete failed: %v", err)
+	}
 	api.Success(w, map[string]string{"status": "deleted"}, middleware.GetRequestID(r.Context()))
 }
 
@@ -292,7 +301,9 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 	employeeID := r.URL.Query().Get("employeeId")
 	var selfEmployeeID string
 	if user.RoleName != auth.RoleHR || employeeID == "" {
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+			log.Printf("leave balances self employee lookup failed: %v", err)
+		}
 	}
 
 	switch user.RoleName {
@@ -304,11 +315,13 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 		}
 		if employeeID != "" && employeeID != selfEmployeeID {
 			var allowed int
-			_ = h.DB.QueryRow(r.Context(), `
+			if err := h.DB.QueryRow(r.Context(), `
         SELECT COUNT(1)
         FROM employees
         WHERE tenant_id = $1 AND id = $2 AND manager_id = $3
-      `, user.TenantID, employeeID, selfEmployeeID).Scan(&allowed)
+      `, user.TenantID, employeeID, selfEmployeeID).Scan(&allowed); err != nil {
+				log.Printf("leave balances manager scope check failed: %v", err)
+			}
 			if allowed == 0 {
 				api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 				return
@@ -394,12 +407,16 @@ func (h *Handler) handleAdjustBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     INSERT INTO leave_balance_adjustments (tenant_id, employee_id, leave_type_id, amount, reason, created_by)
     VALUES ($1,$2,$3,$4,$5,$6)
-  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.Amount, payload.Reason, user.UserID)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.Amount, payload.Reason, user.UserID); err != nil {
+		log.Printf("leave balance adjustment insert failed: %v", err)
+	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.balance.adjust", "leave_balance", payload.EmployeeID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.balance.adjust", "leave_balance", payload.EmployeeID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+		log.Printf("audit leave.balance.adjust failed: %v", err)
+	}
 	api.Success(w, map[string]string{"status": "adjusted"}, middleware.GetRequestID(r.Context()))
 }
 
@@ -420,7 +437,9 @@ func (h *Handler) handleRunAccruals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.accrual.run", "leave_policy", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, summary)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.accrual.run", "leave_policy", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, summary); err != nil {
+		log.Printf("audit leave.accrual.run failed: %v", err)
+	}
 	api.Success(w, summary, middleware.GetRequestID(r.Context()))
 }
 
@@ -440,13 +459,17 @@ func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
 
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+			log.Printf("leave requests employee lookup failed: %v", err)
+		}
 		query += " AND employee_id = $2"
 		args = append(args, employeeID)
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+			log.Printf("leave requests manager lookup failed: %v", err)
+		}
 		query += " AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $2)"
 		args = append(args, managerEmployeeID)
 	}
@@ -499,7 +522,9 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 
 	if user.RoleName != auth.RoleHR {
 		var selfEmployeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+			log.Printf("leave request self employee lookup failed: %v", err)
+		}
 		payload.EmployeeID = selfEmployeeID
 	}
 
@@ -531,22 +556,30 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     INSERT INTO leave_balances (tenant_id, employee_id, leave_type_id, balance, pending, used)
     VALUES ($1,$2,$3,0,$4,0)
     ON CONFLICT (employee_id, leave_type_id) DO UPDATE SET pending = leave_balances.pending + EXCLUDED.pending, updated_at = now()
-  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, days)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, days); err != nil {
+		log.Printf("leave request balance pending update failed: %v", err)
+	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.create", "leave_request", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.create", "leave_request", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+		log.Printf("audit leave.request.create failed: %v", err)
+	}
 	var managerUserID string
-	_ = h.DB.QueryRow(r.Context(), `
+	if err := h.DB.QueryRow(r.Context(), `
     SELECT m.user_id
     FROM employees e
     JOIN employees m ON e.manager_id = m.id
     WHERE e.tenant_id = $1 AND e.id = $2
-  `, user.TenantID, payload.EmployeeID).Scan(&managerUserID)
+  `, user.TenantID, payload.EmployeeID).Scan(&managerUserID); err != nil {
+		log.Printf("leave request manager lookup failed: %v", err)
+	}
 	if managerUserID != "" {
-		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, managerUserID, "leave_submitted", "Leave request submitted", "A leave request is awaiting approval.")
+		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, managerUserID, notifications.TypeLeaveSubmitted, "Leave request submitted", "A leave request is awaiting approval."); err != nil {
+			log.Printf("leave submitted notification failed: %v", err)
+		}
 	}
 
 	api.Created(w, map[string]string{"id": id, "status": leave.StatusPending}, middleware.GetRequestID(r.Context()))
@@ -576,28 +609,38 @@ func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     UPDATE leave_requests SET status = $1, approved_by = $2, approved_at = now() WHERE id = $3
-  `, leave.StatusApproved, user.UserID, requestID)
+  `, leave.StatusApproved, user.UserID, requestID); err != nil {
+		log.Printf("leave request approve update failed: %v", err)
+	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     UPDATE leave_balances
     SET pending = pending - $1, used = used + $1, updated_at = now()
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
-  `, days, user.TenantID, employeeID, leaveTypeID)
+  `, days, user.TenantID, employeeID, leaveTypeID); err != nil {
+		log.Printf("leave balance approve update failed: %v", err)
+	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.approve", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID})
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.approve", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID}); err != nil {
+		log.Printf("audit leave.request.approve failed: %v", err)
+	}
 	var employeeUserID, leaveTypeName string
-	_ = h.DB.QueryRow(r.Context(), `
+	if err := h.DB.QueryRow(r.Context(), `
     SELECT e.user_id, lt.name
     FROM employees e
     JOIN leave_types lt ON lt.id = $2
     WHERE e.tenant_id = $1 AND e.id = $3
-  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName)
+  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName); err != nil {
+		log.Printf("leave approve employee lookup failed: %v", err)
+	}
 	if employeeUserID != "" {
 		title := "Leave approved"
 		body := fmt.Sprintf("Your %s leave request was approved.", leaveTypeName)
-		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, "leave_approved", title, body)
+		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveApproved, title, body); err != nil {
+			log.Printf("leave approved notification failed: %v", err)
+		}
 	}
 
 	api.Success(w, map[string]string{"status": leave.StatusApproved}, middleware.GetRequestID(r.Context()))
@@ -627,28 +670,38 @@ func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     UPDATE leave_requests SET status = $1, approved_by = $2, approved_at = now() WHERE id = $3
-  `, leave.StatusRejected, user.UserID, requestID)
+  `, leave.StatusRejected, user.UserID, requestID); err != nil {
+		log.Printf("leave request reject update failed: %v", err)
+	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     UPDATE leave_balances
     SET pending = pending - $1, updated_at = now()
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
-  `, days, user.TenantID, employeeID, leaveTypeID)
+  `, days, user.TenantID, employeeID, leaveTypeID); err != nil {
+		log.Printf("leave balance reject update failed: %v", err)
+	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.reject", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID})
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.reject", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID}); err != nil {
+		log.Printf("audit leave.request.reject failed: %v", err)
+	}
 	var employeeUserID, leaveTypeName string
-	_ = h.DB.QueryRow(r.Context(), `
+	if err := h.DB.QueryRow(r.Context(), `
     SELECT e.user_id, lt.name
     FROM employees e
     JOIN leave_types lt ON lt.id = $2
     WHERE e.tenant_id = $1 AND e.id = $3
-  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName)
+  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName); err != nil {
+		log.Printf("leave reject employee lookup failed: %v", err)
+	}
 	if employeeUserID != "" {
 		title := "Leave rejected"
 		body := fmt.Sprintf("Your %s leave request was rejected.", leaveTypeName)
-		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, "leave_rejected", title, body)
+		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveRejected, title, body); err != nil {
+			log.Printf("leave rejected notification failed: %v", err)
+		}
 	}
 
 	api.Success(w, map[string]string{"status": leave.StatusRejected}, middleware.GetRequestID(r.Context()))
@@ -680,28 +733,38 @@ func (h *Handler) handleCancelRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     UPDATE leave_requests SET status = $1, cancelled_at = now() WHERE id = $2
-  `, leave.StatusCancelled, requestID)
+  `, leave.StatusCancelled, requestID); err != nil {
+		log.Printf("leave request cancel update failed: %v", err)
+	}
 
-	_, _ = h.DB.Exec(r.Context(), `
+	if _, err := h.DB.Exec(r.Context(), `
     UPDATE leave_balances
     SET pending = pending - $1, updated_at = now()
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
-  `, days, user.TenantID, employeeID, leaveTypeID)
+  `, days, user.TenantID, employeeID, leaveTypeID); err != nil {
+		log.Printf("leave balance cancel update failed: %v", err)
+	}
 
-	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.cancel", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID})
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.cancel", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID}); err != nil {
+		log.Printf("audit leave.request.cancel failed: %v", err)
+	}
 	var employeeUserID, leaveTypeName string
-	_ = h.DB.QueryRow(r.Context(), `
+	if err := h.DB.QueryRow(r.Context(), `
     SELECT e.user_id, lt.name
     FROM employees e
     JOIN leave_types lt ON lt.id = $2
     WHERE e.tenant_id = $1 AND e.id = $3
-  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName)
+  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName); err != nil {
+		log.Printf("leave cancel employee lookup failed: %v", err)
+	}
 	if employeeUserID != "" {
 		title := "Leave cancelled"
 		body := fmt.Sprintf("Your %s leave request was cancelled.", leaveTypeName)
-		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, "leave_cancelled", title, body)
+		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveCancelled, title, body); err != nil {
+			log.Printf("leave cancelled notification failed: %v", err)
+		}
 	}
 
 	api.Success(w, map[string]string{"status": leave.StatusCancelled}, middleware.GetRequestID(r.Context()))
@@ -723,13 +786,17 @@ func (h *Handler) handleCalendar(w http.ResponseWriter, r *http.Request) {
 
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+			log.Printf("calendar employee lookup failed: %v", err)
+		}
 		query += " AND employee_id = $3"
 		args = append(args, employeeID)
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+			log.Printf("calendar manager lookup failed: %v", err)
+		}
 		query += " AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $3)"
 		args = append(args, managerEmployeeID)
 	}
@@ -782,13 +849,17 @@ func (h *Handler) handleCalendarExport(w http.ResponseWriter, r *http.Request) {
 	args := []any{user.TenantID, []string{leave.StatusPending, leave.StatusApproved}}
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+			log.Printf("calendar export employee lookup failed: %v", err)
+		}
 		query += " AND lr.employee_id = $3"
 		args = append(args, employeeID)
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+			log.Printf("calendar export manager lookup failed: %v", err)
+		}
 		query += " AND lr.employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $3)"
 		args = append(args, managerEmployeeID)
 	}
@@ -821,14 +892,18 @@ func (h *Handler) handleCalendarExport(w http.ResponseWriter, r *http.Request) {
 			builder.WriteString("END:VEVENT\r\n")
 		}
 		builder.WriteString("END:VCALENDAR\r\n")
-		_, _ = w.Write([]byte(builder.String()))
+		if _, err := w.Write([]byte(builder.String())); err != nil {
+			log.Printf("calendar export write failed: %v", err)
+		}
 		return
 	}
 
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=leave-calendar.csv")
 	writer := csv.NewWriter(w)
-	_ = writer.Write([]string{"id", "employee_id", "leave_type", "start_date", "end_date", "status"})
+	if err := writer.Write([]string{"id", "employee_id", "leave_type", "start_date", "end_date", "status"}); err != nil {
+		log.Printf("calendar export csv header write failed: %v", err)
+	}
 	for rows.Next() {
 		var id, employeeID, leaveTypeName, status string
 		var startDate, endDate time.Time
@@ -836,9 +911,14 @@ func (h *Handler) handleCalendarExport(w http.ResponseWriter, r *http.Request) {
 			api.Fail(w, http.StatusInternalServerError, "calendar_failed", "failed to export calendar", middleware.GetRequestID(r.Context()))
 			return
 		}
-		_ = writer.Write([]string{id, employeeID, leaveTypeName, startDate.Format("2006-01-02"), endDate.Format("2006-01-02"), status})
+		if err := writer.Write([]string{id, employeeID, leaveTypeName, startDate.Format("2006-01-02"), endDate.Format("2006-01-02"), status}); err != nil {
+			log.Printf("calendar export csv row write failed: %v", err)
+		}
 	}
 	writer.Flush()
+	if err := writer.Error(); err != nil {
+		log.Printf("calendar export csv flush failed: %v", err)
+	}
 }
 
 func (h *Handler) handleReportBalances(w http.ResponseWriter, r *http.Request) {

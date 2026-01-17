@@ -18,6 +18,15 @@ export default function Notifications() {
     load();
   }, []);
 
+  const markRead = async (id) => {
+    try {
+      await api.post(`/notifications/${id}/read`, {});
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   return (
     <section className="page">
       <header className="page-header">
@@ -35,8 +44,12 @@ export default function Notifications() {
             <div>
               <strong>{item.title}</strong>
               <p>{item.body}</p>
+              <small>{item.readAt ? 'Read' : 'Unread'}</small>
             </div>
-            <small>{item.createdAt?.slice(0, 10)}</small>
+            <div className="row-actions">
+              <small>{item.createdAt?.slice(0, 10)}</small>
+              {!item.readAt && <button onClick={() => markRead(item.id)}>Mark read</button>}
+            </div>
           </div>
         ))}
       </div>

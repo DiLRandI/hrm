@@ -9,9 +9,9 @@ func ComputePayroll(baseSalary float64, inputs []InputLine) (gross, deductions, 
 	gross = baseSalary
 	for _, input := range inputs {
 		switch input.Type {
-		case "earning":
+		case ElementTypeEarning:
 			gross += input.Amount
-		case "deduction":
+		case ElementTypeDeduction:
 			deductions += input.Amount
 		}
 	}

@@ -16,9 +16,10 @@ type Goal struct {
 }
 
 type ReviewCycle struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	StartDate time.Time `json:"startDate"`
-	EndDate   time.Time `json:"endDate"`
-	Status    string    `json:"status"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	StartDate  time.Time `json:"startDate"`
+	EndDate    time.Time `json:"endDate"`
+	Status     string    `json:"status"`
+	TemplateID string    `json:"templateId"`
 }

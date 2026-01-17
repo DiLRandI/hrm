@@ -1,6 +1,7 @@
 package reportshandler
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -42,16 +43,24 @@ func (h *Handler) handleEmployeeDashboard(w http.ResponseWriter, r *http.Request
 	}
 
 	var employeeID string
-	_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+	if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		log.Printf("employee lookup failed: %v", err)
+	}
 
 	var leaveBalance float64
-	_ = h.DB.QueryRow(r.Context(), "SELECT COALESCE(SUM(balance),0) FROM leave_balances WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&leaveBalance)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COALESCE(SUM(balance),0) FROM leave_balances WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&leaveBalance); err != nil {
+		log.Printf("leave balance aggregate failed: %v", err)
+	}
 
 	var payslipCount int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payslips WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&payslipCount)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payslips WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&payslipCount); err != nil {
+		log.Printf("payslip count failed: %v", err)
+	}
 
 	var goalCount int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&goalCount)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&goalCount); err != nil {
+		log.Printf("goal count failed: %v", err)
+	}
 
 	api.Success(w, reports.EmployeeDashboard(leaveBalance, payslipCount, goalCount), middleware.GetRequestID(r.Context()))
 }
@@ -68,16 +77,24 @@ func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request)
 	}
 
 	var managerEmployeeID string
-	_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+	if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		log.Printf("manager employee lookup failed: %v", err)
+	}
 
 	var pendingApprovals int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = $2", user.TenantID, leave.StatusPending).Scan(&pendingApprovals)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = $2", user.TenantID, leave.StatusPending).Scan(&pendingApprovals); err != nil {
+		log.Printf("pending approvals count failed: %v", err)
+	}
 
 	var teamGoals int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&teamGoals)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&teamGoals); err != nil {
+		log.Printf("team goals count failed: %v", err)
+	}
 
 	var reviewTasks int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_tasks WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&reviewTasks)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_tasks WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&reviewTasks); err != nil {
+		log.Printf("review tasks count failed: %v", err)
+	}
 
 	api.Success(w, reports.ManagerDashboard(pendingApprovals, teamGoals, reviewTasks), middleware.GetRequestID(r.Context()))
 }
@@ -94,13 +111,19 @@ func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payrollPeriods int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&payrollPeriods)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&payrollPeriods); err != nil {
+		log.Printf("payroll period count failed: %v", err)
+	}
 
 	var leavePending int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = $2", user.TenantID, leave.StatusPending).Scan(&leavePending)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status = $2", user.TenantID, leave.StatusPending).Scan(&leavePending); err != nil {
+		log.Printf("leave pending count failed: %v", err)
+	}
 
 	var reviewCycles int
-	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_cycles WHERE tenant_id = $1", user.TenantID).Scan(&reviewCycles)
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_cycles WHERE tenant_id = $1", user.TenantID).Scan(&reviewCycles); err != nil {
+		log.Printf("review cycles count failed: %v", err)
+	}
 
 	api.Success(w, reports.HRDashboard(payrollPeriods, leavePending, reviewCycles), middleware.GetRequestID(r.Context()))
 }

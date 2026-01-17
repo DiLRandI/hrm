@@ -18,10 +18,18 @@ func New(db *pgxpool.Pool) *Service {
 func (s *Service) Record(ctx context.Context, tenantID, actorID, action, entityType, entityID, requestID, ip string, before, after any) error {
 	var beforeJSON, afterJSON []byte
 	if before != nil {
-		beforeJSON, _ = json.Marshal(before)
+		payload, err := json.Marshal(before)
+		if err != nil {
+			return err
+		}
+		beforeJSON = payload
 	}
 	if after != nil {
-		afterJSON, _ = json.Marshal(after)
+		payload, err := json.Marshal(after)
+		if err != nil {
+			return err
+		}
+		afterJSON = payload
 	}
 
 	_, err := s.DB.Exec(ctx, `

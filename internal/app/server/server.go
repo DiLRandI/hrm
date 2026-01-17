@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -89,7 +90,9 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.H
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		if _, err := w.Write([]byte("ok")); err != nil {
+			log.Printf("healthz write failed: %v", err)
+		}
 	})
 
 	router.Get("/readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +103,9 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.H
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ready"))
+		if _, err := w.Write([]byte("ready")); err != nil {
+			log.Printf("readyz write failed: %v", err)
+		}
 	})
 
 	router.Route("/api/v1", func(r chi.Router) {

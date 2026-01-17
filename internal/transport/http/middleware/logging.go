@@ -41,7 +41,11 @@ func Logger(next http.Handler) http.Handler {
 			RequestID: GetRequestID(r.Context()),
 		}
 
-		payload, _ := json.Marshal(entry)
+		payload, err := json.Marshal(entry)
+		if err != nil {
+			log.Printf("request log marshal failed: %v", err)
+			return
+		}
 		log.Println(string(payload))
 	})
 }

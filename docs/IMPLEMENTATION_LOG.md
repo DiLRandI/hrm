@@ -11,10 +11,9 @@ Start: 2026-01-17
 - Payslip PDFs: render server-side HTML → PDF using a pluggable renderer (default: HTML download if no renderer configured).
 
 ## Pending
-- Define full schema/migrations for core, leave, payroll, performance, GDPR, audit, notifications.
-- Implement Go API server and middleware.
-- Build React SPA and API integration.
-- Add Docker/Docker Compose/K8s assets and README.
+- Security hardening: encryption at rest for sensitive fields, CSP/HSTS tuning, refresh token rotation.
+- Observability: metrics + tracing endpoints.
+- End-to-end UI tests (Playwright) and broader API integration tests.
 - 2026-01-17: Created initial database schema migration (core, leave, payroll, performance, GDPR, audit, notifications).
 - 2026-01-17: Added password reset table to schema.
 - 2026-01-17: Added Go backend skeleton with auth, core HR, leave, payroll, performance, GDPR, notifications, and reports endpoints.
@@ -25,3 +24,7 @@ Start: 2026-01-17
 - 2026-01-17: Added backend unit tests for auth, RBAC permissions, field filtering, leave/day calculation, payroll computation, GDPR payload assembly, reports dashboards, and middleware utilities.
 - 2026-01-17: Added frontend unit tests with Vitest and Testing Library (API client, login flow, dashboard fetch).
 - 2026-01-17: Refactored Go backend into domain/platform/transport layers and restructured React frontend into app/features/services/shared layout.
+- 2026-01-17: Added GDPR retention runs, anonymization execution, and DSAR download support with audit logging.
+- 2026-01-17: Added payroll pay groups, adjustments, summary, exports, and CSV import idempotency support.
+- 2026-01-17: Added performance review templates and HR finalize endpoint for review cycles.
+- 2026-01-17: Expanded frontend pages for leave, payroll, performance, GDPR, and notifications to cover end-to-end workflows.

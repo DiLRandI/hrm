@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR } from '../../../shared/constants/roles.js';
+import { EMPLOYEE_STATUS_ACTIVE } from '../../../shared/constants/statuses.js';
 
 export default function Employees() {
   const { user } = useAuth();
@@ -30,7 +31,7 @@ export default function Employees() {
         firstName: form.firstName,
         lastName: form.lastName,
         email: form.email,
-        status: 'active',
+        status: EMPLOYEE_STATUS_ACTIVE,
       });
       setForm({ firstName: '', lastName: '', email: '' });
       await load();
