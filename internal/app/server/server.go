@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,29 +30,43 @@ type App struct {
 	Router http.Handler
 }
 
-func Run() {
-	cfg := config.Load()
-	if cfg.DatabaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
-	}
-
-	ctx := context.Background()
+func New(ctx context.Context, cfg config.Config) (*App, error) {
 	pool, err := db.Connect(ctx, cfg)
 	if err != nil {
-		log.Fatalf("db connect failed: %v", err)
+		return nil, err
 	}
-	defer pool.Close()
 
 	if err := db.Migrate(ctx, pool, "migrations"); err != nil {
-		log.Fatalf("migrations failed: %v", err)
+		pool.Close()
+		return nil, err
 	}
 
 	if err := db.Seed(ctx, pool, cfg); err != nil {
-		log.Fatalf("seed failed: %v", err)
+		pool.Close()
+		return nil, err
 	}
 
 	coreStore := core.NewStore(pool)
+	router := buildRouter(cfg, pool, coreStore)
 
+	return &App{
+		Config: cfg,
+		DB:     pool,
+		Router: router,
+	}, nil
+}
+
+func (a *App) Close() {
+	if a.DB != nil {
+		a.DB.Close()
+	}
+}
+
+func (a *App) Run() error {
+	return http.ListenAndServe(a.Config.Addr, a.Router)
+}
+
+func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logger)
@@ -106,11 +119,7 @@ func Run() {
 	})
 
 	router.Mount("/", spaHandler{staticPath: cfg.FrontendDir, indexPath: "index.html"})
-
-	log.Printf("HRM server listening on %s", cfg.Addr)
-	if err := http.ListenAndServe(cfg.Addr, router); err != nil {
-		log.Fatalf("server failed: %v", err)
-	}
+	return router
 }
 
 type spaHandler struct {
