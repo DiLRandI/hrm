@@ -15,8 +15,8 @@ export default function Leave() {
         api.get('/leave/types'),
         api.get('/leave/requests'),
       ]);
-      setTypes(typesData);
-      setRequests(requestsData);
+      setTypes(Array.isArray(typesData) ? typesData : []);
+      setRequests(Array.isArray(requestsData) ? requestsData : []);
     } catch (err) {
       setError(err.message);
     }

@@ -8,7 +8,7 @@ export default function Notifications() {
   const load = async () => {
     try {
       const data = await api.get('/notifications');
-      setItems(data);
+      setItems(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message);
     }

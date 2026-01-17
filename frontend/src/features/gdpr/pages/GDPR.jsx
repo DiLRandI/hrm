@@ -9,7 +9,7 @@ export default function GDPR() {
   const load = async () => {
     try {
       const data = await api.get('/gdpr/dsar');
-      setDsars(data);
+      setDsars(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message);
     }

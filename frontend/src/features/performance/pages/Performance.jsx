@@ -11,7 +11,7 @@ export default function Performance() {
   const load = async () => {
     try {
       const data = await api.get('/performance/goals');
-      setGoals(data);
+      setGoals(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message);
     }

@@ -12,7 +12,7 @@ export default function Employees() {
   const load = async () => {
     try {
       const data = await api.get('/employees');
-      setEmployees(data);
+      setEmployees(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message);
     }

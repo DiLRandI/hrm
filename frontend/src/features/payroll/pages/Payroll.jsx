@@ -16,8 +16,8 @@ export default function Payroll() {
         api.get('/payroll/periods'),
         api.get('/payroll/payslips?employeeId=' + (employee?.id || '')),
       ]);
-      setPeriods(periodData);
-      setPayslips(payslipData);
+      setPeriods(Array.isArray(periodData) ? periodData : []);
+      setPayslips(Array.isArray(payslipData) ? payslipData : []);
     } catch (err) {
       setError(err.message);
     }
