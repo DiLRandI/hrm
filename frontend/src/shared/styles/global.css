@@ -335,6 +335,58 @@ button.ghost {
   align-items: center;
 }
 
+.page-loading {
+  padding: 40px;
+  color: var(--ink-muted);
+  font-size: 16px;
+}
+
+.toast-container {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  display: grid;
+  gap: 10px;
+  z-index: 2000;
+}
+
+.toast {
+  background: #1c2a2a;
+  color: var(--ink);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: var(--shadow);
+  min-width: 220px;
+}
+
+.toast--error {
+  background: rgba(127, 29, 29, 0.92);
+}
+
+.toast--success {
+  background: rgba(6, 95, 70, 0.92);
+}
+
+.toast-close {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0;
+  border-radius: 0;
+}
+
+.toast-close:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;

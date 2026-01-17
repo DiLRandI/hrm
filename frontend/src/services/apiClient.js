@@ -1,5 +1,6 @@
 import { API_BASE } from '../shared/constants/api.js';
 import { TOKEN_STORAGE_KEY } from '../shared/constants/storage.js';
+import { pushToast, TOAST_ERROR } from '../shared/toastBus.js';
 
 export function getToken() {
   return localStorage.getItem(TOKEN_STORAGE_KEY);
@@ -31,6 +32,7 @@ async function request(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.error?.message || 'Request failed';
+    pushToast({ message, type: TOAST_ERROR });
     throw new Error(message);
   }
   return data.data ?? data;
@@ -54,6 +56,7 @@ async function requestWithMeta(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.error?.message || 'Request failed';
+    pushToast({ message, type: TOAST_ERROR });
     throw new Error(message);
   }
   const totalRaw = response.headers.get('X-Total-Count');
@@ -79,6 +82,7 @@ async function requestRaw(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const message = data?.error?.message || 'Request failed';
+    pushToast({ message, type: TOAST_ERROR });
     throw new Error(message);
   }
   return data.data ?? data;
@@ -99,6 +103,7 @@ async function download(path, options = {}) {
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
     const message = data?.error?.message || 'Download failed';
+    pushToast({ message, type: TOAST_ERROR });
     throw new Error(message);
   }
 

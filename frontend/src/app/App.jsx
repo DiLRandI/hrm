@@ -12,10 +12,15 @@ import Reports from '../features/reports/pages/Reports.jsx';
 import Notifications from '../features/notifications/pages/Notifications.jsx';
 import Audit from '../features/audit/pages/Audit.jsx';
 import { ROLE_EMPLOYEE, ROLE_HR } from '../shared/constants/roles.js';
+import RequireRole from './RequireRole.jsx';
+import { ToastProvider } from '../shared/components/ToastProvider.jsx';
 
 function AppShell() {
-  const { user, logout } = useAuth();
+  const { user, logout, loading } = useAuth();
 
+  if (loading) {
+    return <div className="page-loading">Loading...</div>;
+  }
   if (!user) {
     return <Navigate to="/login" replace />;
   }
@@ -52,7 +57,14 @@ function AppShell() {
           <Route path="/gdpr" element={<GDPR />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/notifications" element={<Notifications />} />
-          <Route path="/audit" element={<Audit />} />
+          <Route
+            path="/audit"
+            element={
+              <RequireRole allowed={[ROLE_HR]}>
+                <Audit />
+              </RequireRole>
+            }
+          />
         </Routes>
       </main>
     </div>
@@ -61,11 +73,13 @@ function AppShell() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/*" element={<AppShell />} />
-      </Routes>
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/*" element={<AppShell />} />
+        </Routes>
+      </AuthProvider>
+    </ToastProvider>
   );
 }
