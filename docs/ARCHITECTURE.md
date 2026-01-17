@@ -32,3 +32,7 @@ Frontend (React):
 
 ## Jobs
 In-process jobs can be added for accruals, retention, and payroll recalculation. The design is queue-ready for future background worker integration.
+
+## Observability
+- Request IDs in logs plus JSON logging.
+- Optional metrics endpoint for basic latency/error/job counters.

@@ -16,7 +16,11 @@ Start: 2026-01-17
 - Payslip PDFs: render server-side HTML → PDF using a pluggable renderer (default: HTML download if no renderer configured).
 
 ## Pending
-- None.
+- Broader rate limiting for non-auth sensitive endpoints (imports, approvals, GDPR actions).
+- Structured payload validation for enums/bounds/date ranges.
+- Wrap payroll finalize in a transaction and add idempotency for GDPR retention/anonymization.
+- Route-level guards + centralized error/toast UI for HR/manager-only screens.
+- Expand unit/E2E tests for performance and notifications workflows.
 - 2026-01-17: Created initial database schema migration (core, leave, payroll, performance, GDPR, audit, notifications).
 - 2026-01-17: Added password reset table to schema.
 - 2026-01-17: Added Go backend skeleton with auth, core HR, leave, payroll, performance, GDPR, notifications, and reports endpoints.
