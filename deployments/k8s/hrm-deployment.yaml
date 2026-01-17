@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hrm-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hrm-app
+  template:
+    metadata:
+      labels:
+        app: hrm-app
+    spec:
+      containers:
+        - name: hrm-app
+          image: hrm-app:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DATABASE_URL
+              value: "postgres://hrm:hrm@postgres:5432/hrm?sslmode=disable"
+            - name: JWT_SECRET
+              value: "change-me"
+            - name: APP_ADDR
+              value: ":8080"
+            - name: SEED_ADMIN_EMAIL
+              value: "admin@example.com"
+            - name: SEED_ADMIN_PASSWORD
+              value: "ChangeMe123!"
