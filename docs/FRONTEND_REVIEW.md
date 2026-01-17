@@ -1,26 +1,43 @@
 # Frontend Review (Lead React Engineer)
 
+## Scope
+React SPA under `frontend/src`. Review focuses on architecture, data flow, UX consistency, and test coverage.
+
 ## Architecture Snapshot
-- Feature-based layout under `frontend/src/features/*`.
-- Shared API client in `frontend/src/services/apiClient.js`.
+- Feature-based layout under `frontend/src/features/*` with simple page-level state management.
+- Shared API client in `frontend/src/services/apiClient.js` (JSON + download support).
 - Auth context provides token storage and user identity.
 
 ## Strengths
-- Clear separation by feature modules (core, leave, payroll, performance, GDPR, reports).
+- Clear module separation (core, leave, payroll, performance, GDPR, reports).
 - Lightweight fetch wrapper with consistent error handling.
-- Role-aware rendering for HR/manager actions in key pages.
+- Role-aware rendering for HR/manager actions in core workflows.
 
-## Risks & Gaps
-- **Data fetching** is ad-hoc per page; no caching or shared query state.
-- **Form validation** is minimal and mostly server-driven; UX errors are not standardized.
-- **State coupling**: multiple pages manage large state sets locally; could benefit from shared hooks.
-- **Testing**: only basic tests exist (auth + dashboard); new workflows are untested.
+## Findings (Key Gaps)
+### Data Fetching & State
+- Ad-hoc data fetching per page; no caching or shared loading/error states.
+- Multiple parallel requests are managed manually; repeated patterns could be standardized.
+- No optimistic updates or background refresh for time-sensitive dashboards.
 
-## Recommendations
-1. Adopt a data-fetching layer (TanStack Query) to standardize caching, loading, and error states.
-2. Centralize form validation and errors (Zod + shared form components).
-3. Add UI-level role guards (route-level) and better empty/failed states.
-4. Expand unit tests and add Playwright E2E flows for leave, payroll, performance, and GDPR.
+### UX & Validation
+- Form validation is minimal and mostly server-driven; JSON inputs (templates, PIPs) rely on user correctness.
+- Error states are inconsistent and not centrally surfaced (no toast/alert system).
+- Large tables lack pagination/search/filtering controls, which will degrade UX with real data volumes.
+
+### Access Control & Routing
+- Role gating is done within pages but there are no route-level guards for HR/manager-only screens.
+- Employee IDs are entered manually in several forms; a directory picker would reduce errors.
+
+### Testing
+- Only basic unit tests exist (auth + dashboard). New workflows (leave, payroll, performance, GDPR) are untested.
+- No Playwright E2E coverage.
+
+## Recommendations (Prioritized)
+1. Introduce a data-fetching layer (TanStack Query) for caching, loading states, and error handling.
+2. Add shared form components and schema validation (Zod) with inline error messaging.
+3. Implement pagination/search/filtering for lists and tables.
+4. Add route-level role guards and a centralized notification/toast system.
+5. Expand tests: unit tests for key pages + Playwright E2E for leave, payroll, performance, GDPR.
 
 ## UI Consistency
-- Current pages use consistent layout classes; a small component library (buttons, tables, cards) would reduce duplication.
+- Layout classes are consistent; a small component library (Buttons, Tables, Cards, Modals) will reduce duplication and improve accessibility.

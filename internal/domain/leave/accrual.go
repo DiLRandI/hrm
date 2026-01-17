@@ -3,7 +3,7 @@ package leave
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -77,7 +77,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
     `, tenantID)
 		if err != nil {
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
-				log.Printf("leave accrual rollback failed: %v", rbErr)
+				slog.Warn("leave accrual rollback failed", "err", rbErr)
 			}
 			return summary, err
 		}
@@ -88,7 +88,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			if err := employees.Scan(&employeeID, &startDate); err != nil {
 				employees.Close()
 				if rbErr := tx.Rollback(ctx); rbErr != nil {
-					log.Printf("leave accrual rollback failed: %v", rbErr)
+					slog.Warn("leave accrual rollback failed", "err", rbErr)
 				}
 				return summary, err
 			}
@@ -124,7 +124,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			if err != nil {
 				employees.Close()
 				if rbErr := tx.Rollback(ctx); rbErr != nil {
-					log.Printf("leave accrual rollback failed: %v", rbErr)
+					slog.Warn("leave accrual rollback failed", "err", rbErr)
 				}
 				return summary, err
 			}
@@ -133,7 +133,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 		if err := employees.Err(); err != nil {
 			employees.Close()
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
-				log.Printf("leave accrual rollback failed: %v", rbErr)
+				slog.Warn("leave accrual rollback failed", "err", rbErr)
 			}
 			return summary, err
 		}
@@ -146,7 +146,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
     `, tenantID, policy.ID, periodStart)
 		if err != nil {
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
-				log.Printf("leave accrual rollback failed: %v", rbErr)
+				slog.Warn("leave accrual rollback failed", "err", rbErr)
 			}
 			return summary, err
 		}

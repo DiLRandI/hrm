@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -169,7 +169,7 @@ func (h *Handler) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.schedule.create", "pay_schedule", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit payroll.schedule.create failed: %v", err)
+		slog.Warn("audit payroll.schedule.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
@@ -233,7 +233,7 @@ func (h *Handler) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.group.create", "pay_group", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit payroll.group.create failed: %v", err)
+		slog.Warn("audit payroll.group.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
@@ -296,7 +296,7 @@ func (h *Handler) handleCreateElement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.element.create", "pay_element", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit payroll.element.create failed: %v", err)
+		slog.Warn("audit payroll.element.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
@@ -375,7 +375,7 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.period.create", "payroll_period", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit payroll.period.create failed: %v", err)
+		slog.Warn("audit payroll.period.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
@@ -621,7 +621,7 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
       ORDER BY created_at DESC
       LIMIT 1
     `, user.TenantID, employeeID).Scan(&previousNet); err != nil {
-			log.Printf("previous net lookup failed: %v", err)
+			slog.Warn("previous net lookup failed", "err", err)
 		}
 		if previousNet > 0 {
 			diff := net - previousNet
@@ -634,7 +634,7 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 		}
 		warningsJSON, err := json.Marshal(warnings)
 		if err != nil {
-			log.Printf("warnings marshal failed: %v", err)
+			slog.Warn("warnings marshal failed", "err", err)
 			warningsJSON = []byte("[]")
 		}
 
@@ -656,7 +656,7 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.run", "payroll_period", periodID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
-		log.Printf("audit payroll.run failed: %v", err)
+		slog.Warn("audit payroll.run failed", "err", err)
 	}
 
 	api.Success(w, map[string]string{"status": payroll.PeriodStatusReviewed}, middleware.GetRequestID(r.Context()))
@@ -693,7 +693,7 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 	if idempotencyKey != "" {
 		stored, found, err := middleware.CheckIdempotency(r.Context(), h.DB, user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash)
 		if err != nil {
-			log.Printf("idempotency check failed: %v", err)
+			slog.Warn("idempotency check failed", "err", err)
 		}
 		if found {
 			api.Success(w, json.RawMessage(stored), middleware.GetRequestID(r.Context()))
@@ -731,41 +731,41 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 		for rows.Next() {
 			var payslipID, employeeID string
 			if err := rows.Scan(&payslipID, &employeeID); err != nil {
-				log.Printf("payslip scan failed: %v", err)
+				slog.Warn("payslip scan failed", "err", err)
 				continue
 			}
 			fileURL, err := h.generatePayslipPDF(r.Context(), user.TenantID, periodID, employeeID, payslipID)
 			if err != nil {
-				log.Printf("payslip pdf generation failed: %v", err)
+				slog.Warn("payslip pdf generation failed", "err", err)
 			} else if fileURL != "" {
 				if _, err := h.DB.Exec(r.Context(), "UPDATE payslips SET file_url = $1 WHERE id = $2", fileURL, payslipID); err != nil {
-					log.Printf("payslip file url update failed: %v", err)
+					slog.Warn("payslip file url update failed", "err", err)
 				}
 			}
 			var employeeUserID string
 			if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, employeeID).Scan(&employeeUserID); err != nil {
-				log.Printf("payslip employee user lookup failed: %v", err)
+				slog.Warn("payslip employee user lookup failed", "err", err)
 			}
 			if employeeUserID != "" {
 				if err := notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypePayslipPublished, "Payslip published", "A new payslip is available for download."); err != nil {
-					log.Printf("payslip notification failed: %v", err)
+					slog.Warn("payslip notification failed", "err", err)
 				}
 			}
 		}
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.finalize", "payroll_period", periodID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
-		log.Printf("audit payroll.finalize failed: %v", err)
+		slog.Warn("audit payroll.finalize failed", "err", err)
 	}
 
 	response := map[string]string{"status": payroll.PeriodStatusFinalized}
 	payload, err := json.Marshal(response)
 	if err != nil {
-		log.Printf("finalize response marshal failed: %v", err)
+		slog.Warn("finalize response marshal failed", "err", err)
 	}
 	if idempotencyKey != "" {
 		if err := middleware.SaveIdempotency(r.Context(), h.DB, user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash, payload); err != nil {
-			log.Printf("idempotency save failed: %v", err)
+			slog.Warn("idempotency save failed", "err", err)
 		}
 	}
 
@@ -785,7 +785,7 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 	}
 	if employeeID == "" {
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
-			log.Printf("payslip list employee lookup failed: %v", err)
+			slog.Warn("payslip list employee lookup failed", "err", err)
 		}
 	}
 	if employeeID == "" {
@@ -854,7 +854,7 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 	if idempotencyKey != "" {
 		stored, found, err := middleware.CheckIdempotency(r.Context(), h.DB, user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash)
 		if err != nil {
-			log.Printf("idempotency check failed: %v", err)
+			slog.Warn("idempotency check failed", "err", err)
 		}
 		if found {
 			api.Success(w, json.RawMessage(stored), middleware.GetRequestID(r.Context()))
@@ -895,24 +895,24 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 		if employeeID == "" {
 			if email := get(row, "employee_email"); email != "" {
 				if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND email = $2", user.TenantID, email).Scan(&employeeID); err != nil {
-					log.Printf("import input employee lookup failed for %s: %v", email, err)
+					slog.Warn("import input employee lookup failed", "email", email, "err", err)
 				}
 			}
 		}
 		elementID := get(row, "element_id")
 		units, err := strconv.ParseFloat(get(row, "units"), 64)
 		if err != nil {
-			log.Printf("import input units parse failed: %v", err)
+			slog.Warn("import input units parse failed", "err", err)
 			units = 0
 		}
 		rate, err := strconv.ParseFloat(get(row, "rate"), 64)
 		if err != nil {
-			log.Printf("import input rate parse failed: %v", err)
+			slog.Warn("import input rate parse failed", "err", err)
 			rate = 0
 		}
 		amount, err := strconv.ParseFloat(get(row, "amount"), 64)
 		if err != nil {
-			log.Printf("import input amount parse failed: %v", err)
+			slog.Warn("import input amount parse failed", "err", err)
 			amount = 0
 		}
 		source := get(row, "source")
@@ -929,22 +929,22 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
       INSERT INTO payroll_inputs (tenant_id, period_id, employee_id, element_id, units, rate, amount, source)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
     `, user.TenantID, periodID, employeeID, elementID, units, rate, amount, source); err != nil {
-			log.Printf("import input insert failed: %v", err)
+			slog.Warn("import input insert failed", "err", err)
 			continue
 		}
 		inserted++
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.inputs.import", "payroll_period", periodID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"count": inserted}); err != nil {
-		log.Printf("audit payroll.inputs.import failed: %v", err)
+		slog.Warn("audit payroll.inputs.import failed", "err", err)
 	}
 	response := map[string]any{"imported": inserted}
 	if idempotencyKey != "" {
 		encoded, err := json.Marshal(response)
 		if err != nil {
-			log.Printf("idempotency response marshal failed: %v", err)
+			slog.Warn("idempotency response marshal failed", "err", err)
 		} else if err := middleware.SaveIdempotency(r.Context(), h.DB, user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash, encoded); err != nil {
-			log.Printf("idempotency save failed: %v", err)
+			slog.Warn("idempotency save failed", "err", err)
 		}
 	}
 	api.Success(w, response, middleware.GetRequestID(r.Context()))
@@ -968,7 +968,7 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
-			log.Printf("adjustments list employee lookup failed: %v", err)
+			slog.Warn("adjustments list employee lookup failed", "err", err)
 		}
 		query += " AND employee_id = $3"
 		args = append(args, employeeID)
@@ -1031,7 +1031,7 @@ func (h *Handler) handleCreateAdjustment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.adjustment.create", "payroll_adjustment", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit payroll.adjustment.create failed: %v", err)
+		slog.Warn("audit payroll.adjustment.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
@@ -1055,7 +1055,7 @@ func (h *Handler) handlePeriodSummary(w http.ResponseWriter, r *http.Request) {
     FROM payroll_results
     WHERE tenant_id = $1 AND period_id = $2
   `, user.TenantID, periodID).Scan(&gross, &deductions, &net, &count); err != nil {
-		log.Printf("period summary totals query failed: %v", err)
+		slog.Warn("period summary totals query failed", "err", err)
 	}
 
 	warningCounts := map[string]int{}
@@ -1069,12 +1069,12 @@ func (h *Handler) handlePeriodSummary(w http.ResponseWriter, r *http.Request) {
 		for rows.Next() {
 			var raw []byte
 			if err := rows.Scan(&raw); err != nil {
-				log.Printf("period summary warnings scan failed: %v", err)
+				slog.Warn("period summary warnings scan failed", "err", err)
 				continue
 			}
 			var warnings []string
 			if err := json.Unmarshal(raw, &warnings); err != nil {
-				log.Printf("period summary warnings unmarshal failed: %v", err)
+				slog.Warn("period summary warnings unmarshal failed", "err", err)
 				continue
 			}
 			for _, wKey := range warnings {
@@ -1108,7 +1108,7 @@ func (h *Handler) handleReopenPeriod(w http.ResponseWriter, r *http.Request) {
 		Reason string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		log.Printf("reopen payload decode failed: %v", err)
+		slog.Warn("reopen payload decode failed", "err", err)
 	}
 	if strings.TrimSpace(payload.Reason) == "" {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "reopen reason required", middleware.GetRequestID(r.Context()))
@@ -1137,14 +1137,14 @@ func (h *Handler) handleReopenPeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.DB.Exec(r.Context(), "DELETE FROM payroll_results WHERE tenant_id = $1 AND period_id = $2", user.TenantID, periodID); err != nil {
-		log.Printf("payroll results delete failed: %v", err)
+		slog.Warn("payroll results delete failed", "err", err)
 	}
 	if _, err := h.DB.Exec(r.Context(), "DELETE FROM payslips WHERE tenant_id = $1 AND period_id = $2", user.TenantID, periodID); err != nil {
-		log.Printf("payslips delete failed: %v", err)
+		slog.Warn("payslips delete failed", "err", err)
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.reopen", "payroll_period", periodID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit payroll.reopen failed: %v", err)
+		slog.Warn("audit payroll.reopen failed", "err", err)
 	}
 	api.Success(w, map[string]string{"status": payroll.PeriodStatusDraft}, middleware.GetRequestID(r.Context()))
 }
@@ -1174,7 +1174,7 @@ func (h *Handler) handleExportRegister(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=payroll-register.csv")
 	writer := csv.NewWriter(w)
 	if err := writer.Write([]string{"employee_id", "first_name", "last_name", "gross", "deductions", "net", "currency"}); err != nil {
-		log.Printf("export register header write failed: %v", err)
+		slog.Warn("export register header write failed", "err", err)
 	}
 	for rows.Next() {
 		var id, first, last, currency string
@@ -1184,12 +1184,12 @@ func (h *Handler) handleExportRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := writer.Write([]string{id, first, last, fmt.Sprintf("%.2f", gross), fmt.Sprintf("%.2f", deductions), fmt.Sprintf("%.2f", net), currency}); err != nil {
-			log.Printf("export register row write failed: %v", err)
+			slog.Warn("export register row write failed", "err", err)
 		}
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		log.Printf("export register flush failed: %v", err)
+		slog.Warn("export register flush failed", "err", err)
 	}
 }
 
@@ -1216,20 +1216,20 @@ func (h *Handler) handleExportJournal(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=payroll-journal.csv")
 	writer := csv.NewWriter(w)
 	if err := writer.Write([]string{"account", "debit", "credit"}); err != nil {
-		log.Printf("export journal header write failed: %v", err)
+		slog.Warn("export journal header write failed", "err", err)
 	}
 	if err := writer.Write([]string{"Payroll Expense", fmt.Sprintf("%.2f", gross), ""}); err != nil {
-		log.Printf("export journal expense row write failed: %v", err)
+		slog.Warn("export journal expense row write failed", "err", err)
 	}
 	if err := writer.Write([]string{"Payroll Deductions", "", fmt.Sprintf("%.2f", deductions)}); err != nil {
-		log.Printf("export journal deductions row write failed: %v", err)
+		slog.Warn("export journal deductions row write failed", "err", err)
 	}
 	if err := writer.Write([]string{"Payroll Cash", "", fmt.Sprintf("%.2f", net)}); err != nil {
-		log.Printf("export journal cash row write failed: %v", err)
+		slog.Warn("export journal cash row write failed", "err", err)
 	}
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		log.Printf("export journal flush failed: %v", err)
+		slog.Warn("export journal flush failed", "err", err)
 	}
 }
 
@@ -1255,7 +1255,7 @@ func (h *Handler) handleDownloadPayslip(w http.ResponseWriter, r *http.Request) 
 	if user.RoleName != auth.RoleHR {
 		var selfEmployeeID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
-			log.Printf("payslip download self employee lookup failed: %v", err)
+			slog.Warn("payslip download self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || employeeID != selfEmployeeID {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
@@ -1266,15 +1266,15 @@ func (h *Handler) handleDownloadPayslip(w http.ResponseWriter, r *http.Request) 
 	if fileURL == "" {
 		var periodID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT period_id FROM payslips WHERE tenant_id = $1 AND id = $2", user.TenantID, payslipID).Scan(&periodID); err != nil {
-			log.Printf("payslip period lookup failed: %v", err)
+			slog.Warn("payslip period lookup failed", "err", err)
 		}
 		fileURL, err = h.generatePayslipPDF(r.Context(), user.TenantID, periodID, employeeID, payslipID)
 		if err != nil {
-			log.Printf("payslip pdf generation failed: %v", err)
+			slog.Warn("payslip pdf generation failed", "err", err)
 		}
 		if fileURL != "" {
 			if _, err := h.DB.Exec(r.Context(), "UPDATE payslips SET file_url = $1 WHERE id = $2", fileURL, payslipID); err != nil {
-				log.Printf("payslip file url update failed: %v", err)
+				slog.Warn("payslip file url update failed", "err", err)
 			}
 		}
 	}
@@ -1316,11 +1316,11 @@ func (h *Handler) handleRegeneratePayslip(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if _, err := h.DB.Exec(r.Context(), "UPDATE payslips SET file_url = $1 WHERE id = $2", fileURL, payslipID); err != nil {
-		log.Printf("payslip regenerate update failed: %v", err)
+		slog.Warn("payslip regenerate update failed", "err", err)
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payslip.regenerate", "payslip", payslipID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
-		log.Printf("audit payslip.regenerate failed: %v", err)
+		slog.Warn("audit payslip.regenerate failed", "err", err)
 	}
 	api.Success(w, map[string]string{"status": "regenerated"}, middleware.GetRequestID(r.Context()))
 }

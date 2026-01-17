@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -134,7 +134,7 @@ func (h *Handler) handleCreateRetention(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.retention.save", "retention_policy", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit gdpr.retention.save failed: %v", err)
+		slog.Warn("audit gdpr.retention.save failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
@@ -236,7 +236,7 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
       VALUES ($1,$2,$3,$4,$5)
       RETURNING id
     `, user.TenantID, category, cutoff, status, deleted).Scan(&runID); err != nil {
-			log.Printf("retention run insert failed: %v", err)
+			slog.Warn("retention run insert failed", "err", err)
 		}
 
 		summaries = append(summaries, runSummary{
@@ -248,7 +248,7 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.retention.run", "retention_run", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, summaries); err != nil {
-		log.Printf("audit gdpr.retention.run failed: %v", err)
+		slog.Warn("audit gdpr.retention.run failed", "err", err)
 	}
 	api.Success(w, summaries, middleware.GetRequestID(r.Context()))
 }
@@ -269,7 +269,7 @@ func (h *Handler) handleListDSAR(w http.ResponseWriter, r *http.Request) {
 	if user.RoleName != auth.RoleHR {
 		var employeeID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
-			log.Printf("dsar list employee lookup failed: %v", err)
+			slog.Warn("dsar list employee lookup failed", "err", err)
 		}
 		if employeeID == "" {
 			api.Success(w, []map[string]any{}, middleware.GetRequestID(r.Context()))
@@ -325,7 +325,7 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 	}
 	if payload.EmployeeID == "" {
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID); err != nil {
-			log.Printf("dsar request employee lookup failed: %v", err)
+			slog.Warn("dsar request employee lookup failed", "err", err)
 		}
 	}
 	if payload.EmployeeID == "" {
@@ -335,7 +335,7 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 	if user.RoleName != auth.RoleHR {
 		var selfEmployeeID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
-			log.Printf("dsar request self employee lookup failed: %v", err)
+			slog.Warn("dsar request self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || payload.EmployeeID != selfEmployeeID {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
@@ -354,7 +354,7 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.dsar.request", "dsar_export", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit gdpr.dsar.request failed: %v", err)
+		slog.Warn("audit gdpr.dsar.request failed", "err", err)
 	}
 
 	status := gdpr.DSARStatusProcessing
@@ -364,17 +364,17 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 		if _, err := h.DB.Exec(r.Context(), `
       UPDATE dsar_exports SET status = $1, file_url = $2, completed_at = now() WHERE id = $3
     `, gdpr.DSARStatusCompleted, fileURL, id); err != nil {
-			log.Printf("dsar complete update failed: %v", err)
+			slog.Warn("dsar complete update failed", "err", err)
 		}
 		if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.dsar.complete", "dsar_export", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"fileUrl": fileURL}); err != nil {
-			log.Printf("audit gdpr.dsar.complete failed: %v", err)
+			slog.Warn("audit gdpr.dsar.complete failed", "err", err)
 		}
 	} else {
 		status = gdpr.DSARStatusFailed
 		if _, err := h.DB.Exec(r.Context(), `
       UPDATE dsar_exports SET status = $1 WHERE id = $2
     `, gdpr.DSARStatusFailed, id); err != nil {
-			log.Printf("dsar failed update failed: %v", err)
+			slog.Warn("dsar failed update failed", "err", err)
 		}
 	}
 
@@ -403,7 +403,7 @@ func (h *Handler) handleDownloadDSAR(w http.ResponseWriter, r *http.Request) {
 	if user.RoleName != auth.RoleHR {
 		var selfEmployeeID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
-			log.Printf("dsar download self employee lookup failed: %v", err)
+			slog.Warn("dsar download self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || selfEmployeeID != employeeID {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
@@ -425,7 +425,7 @@ func (h *Handler) handleDownloadDSAR(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=dsar-%s.json", exportID))
 	http.ServeFile(w, r, fileURL)
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.dsar.download", "dsar_export", exportID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
-		log.Printf("audit gdpr.dsar.download failed: %v", err)
+		slog.Warn("audit gdpr.dsar.download failed", "err", err)
 	}
 }
 
@@ -612,7 +612,7 @@ func (h *Handler) handleRequestAnonymization(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.anonymize.request", "anonymization_job", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit gdpr.anonymize.request failed: %v", err)
+		slog.Warn("audit gdpr.anonymize.request failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id, "status": gdpr.AnonymizationRequested}, middleware.GetRequestID(r.Context()))
 }
@@ -674,7 +674,7 @@ func (h *Handler) handleExecuteAnonymization(w http.ResponseWriter, r *http.Requ
     FROM employees
     WHERE tenant_id = $1 AND id = $2
   `, user.TenantID, employeeID).Scan(&userID); err != nil {
-		log.Printf("anonymization user lookup failed: %v", err)
+		slog.Warn("anonymization user lookup failed", "err", err)
 	}
 
 	anonEmployeeEmail := fmt.Sprintf("anonymized+%s@example.local", employeeID)
@@ -794,7 +794,7 @@ func (h *Handler) handleExecuteAnonymization(w http.ResponseWriter, r *http.Requ
 	}
 
 	if err := audit.New(h.DB).Record(ctx, user.TenantID, user.UserID, "gdpr.anonymize.execute", "anonymization_job", jobID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID}); err != nil {
-		log.Printf("audit gdpr.anonymize.execute failed: %v", err)
+		slog.Warn("audit gdpr.anonymize.execute failed", "err", err)
 	}
 	api.Success(w, map[string]string{"status": gdpr.AnonymizationCompleted}, middleware.GetRequestID(r.Context()))
 }
@@ -805,7 +805,7 @@ func (h *Handler) failAnonymization(ctx context.Context, tenantID, jobID string)
     SET status = $1
     WHERE tenant_id = $2 AND id = $3
   `, gdpr.AnonymizationFailed, tenantID, jobID); err != nil {
-		log.Printf("anonymization fail update failed: %v", err)
+		slog.Warn("anonymization fail update failed", "err", err)
 	}
 }
 

@@ -3,7 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -57,14 +57,14 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationsDir string) erro
 
 		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
-				log.Printf("migration %s rollback failed: %v", version, rbErr)
+				slog.Warn("migration rollback failed", "version", version, "err", rbErr)
 			}
 			return fmt.Errorf("migration %s failed: %w", version, err)
 		}
 
 		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
-				log.Printf("migration %s rollback failed: %v", version, rbErr)
+				slog.Warn("migration rollback failed", "version", version, "err", rbErr)
 			}
 			return err
 		}

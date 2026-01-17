@@ -1,26 +1,53 @@
-# Pending Features & Gaps
+# Pending Features & Gaps (Full Analysis)
 
-This document tracks remaining gaps against the PRD and production readiness review after the latest implementation pass.
+This document lists remaining gaps against the PRD and production-readiness expectations. Items are grouped by area and ordered by impact.
 
 ## Security & Compliance
-- **Encryption at rest** for sensitive fields (salary, bank account, national ID) is not implemented at the application or DB layer. A key-management plan and field-level encryption are still needed.
+- **Encryption at rest** for sensitive fields (salary, bank account, national ID) is not implemented (DB/application-level encryption missing).
+- **Audit log access**: audit events exist in DB but there is no API/UI for review or export.
 - **MFA** is not implemented (optional in v1 but still pending).
-- **Refresh token rotation** and explicit session revocation flows are minimal; logout clears sessions but there is no rotation policy.
-- **Audit log access**: audit events exist but there is no API/UI for audit log review.
+- **Refresh token rotation** and token revocation policy are minimal (logout clears a session record but no rotation policy).
+- **Security headers** are basic; CSP tuning and HSTS enforcement depend on upstream TLS and are not fully configured.
 
-## HR Core & Org
-- **Department maintenance** supports list/create only; update/delete flows and org chart visualization are pending.
-- **Manager history UI** is not exposed (history is tracked in `manager_relations` but not surfaced).
+## GDPR
+- **DSAR export coverage is partial**: exports include employee, leave requests, payroll results, and goals only; missing feedback/check-ins/PIPs/notifications/access logs.
+- **Consent records** table exists, but there are no API endpoints or UI flows to manage consent.
+- **Retention jobs are manual**: no scheduler/cron to run retention automatically; no run history UI beyond API list.
+- **Anonymization storage** relies on local file paths; no secure object storage or signed download URLs.
+
+## Core HR & Org
+- **Department update/delete** flows are missing (only list/create).
+- **Org chart UI** and manager history UI are not present (history is stored in `manager_relations` only).
+- **Role/permission management UI** is missing (roles seeded only).
+
+## Leave
+- **Accruals run manually** via API; no scheduled accrual job.
+- **Approval rules** are simplified; policy-driven multi-step approval is not configurable in UI.
+
+## Payroll
+- **Pay groups are not applied**: there is no employee-to-pay-group assignment and payroll does not use groups for currency/schedule overrides.
+- **Retro adjustments** are basic (single-line adjustments only; no effective-date calculations).
+- **Journal template export** is a basic CSV; no configurable templates or mapping rules.
+
+## Performance
+- **Review templates** are stored but not enforced in review response UI (responses are free-form JSON).
+- **Review cycle workflow** is simplified; no task state transitions beyond submit/finalize.
+- **Rating distribution dashboards** are limited to summary numbers; no visual breakdown UI.
 
 ## Reporting & Exports
-- **Cross-module report exports** (CSV/PDF) beyond payroll/leave exports are limited. Reports dashboards do not support export.
+- **Cross-module exports** (CSV/PDF) are limited to payroll and leave calendar; reports dashboards are not exportable.
+- **Pagination** is missing for large datasets (employees, leave requests, audit/access logs, etc.).
+
+## Notifications
+- **Email notifications** are not implemented (in-app only).
 
 ## Observability & Ops
-- **Metrics and tracing** endpoints are not implemented.
-- **Background job status pages** (accrual/retention/payroll) are not exposed beyond API responses.
+- **Metrics/tracing** endpoints are missing.
+- **Job status pages** for payroll/accrual/retention are not implemented (API-only summaries).
+- **Background job queue** is not implemented (all jobs are in-process/manual).
 
 ## Testing
-- **End-to-end UI tests** (Playwright) are not implemented.
-- **Integration tests** for authorization and BOLA coverage are minimal.
+- **E2E UI tests** (Playwright) are not present.
+- **Authorization coverage** in integration tests is minimal; BOLA checks should be expanded.
 
-These items should be reviewed and scheduled based on deployment risk and compliance requirements.
+These items should be prioritized based on deployment risk (security/compliance first), followed by operations and scalability concerns.

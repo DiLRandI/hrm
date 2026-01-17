@@ -1,20 +1,10 @@
 package middleware
 
 import (
-	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 )
-
-type logEntry struct {
-	Timestamp string `json:"ts"`
-	Method    string `json:"method"`
-	Path      string `json:"path"`
-	Status    int    `json:"status"`
-	Duration  int64  `json:"durationMs"`
-	RequestID string `json:"requestId"`
-}
 
 type statusRecorder struct {
 	http.ResponseWriter
@@ -31,21 +21,12 @@ func Logger(next http.Handler) http.Handler {
 		start := time.Now()
 		recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(recorder, r)
-
-		entry := logEntry{
-			Timestamp: time.Now().UTC().Format(time.RFC3339),
-			Method:    r.Method,
-			Path:      r.URL.Path,
-			Status:    recorder.status,
-			Duration:  time.Since(start).Milliseconds(),
-			RequestID: GetRequestID(r.Context()),
-		}
-
-		payload, err := json.Marshal(entry)
-		if err != nil {
-			log.Printf("request log marshal failed: %v", err)
-			return
-		}
-		log.Println(string(payload))
+		slog.Info("http.request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", recorder.status,
+			"durationMs", time.Since(start).Milliseconds(),
+			"requestId", GetRequestID(r.Context()),
+		)
 	})
 }

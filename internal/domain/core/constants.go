@@ -1,8 +1,8 @@
 package core
 
 const (
-	UserStatusActive     = "active"
-	UserStatusDisabled   = "disabled"
-	EmployeeStatusActive = "active"
+	UserStatusActive         = "active"
+	UserStatusDisabled       = "disabled"
+	EmployeeStatusActive     = "active"
 	EmployeeStatusAnonymized = "anonymized"
 )

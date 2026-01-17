@@ -3,7 +3,7 @@ package corehandler
 import (
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -128,12 +128,12 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
     INSERT INTO access_logs (tenant_id, actor_user_id, employee_id, fields, request_id)
     VALUES ($1,$2,$3,$4,$5)
   `, user.TenantID, user.UserID, employeeID, []string{"employee_profile"}, middleware.GetRequestID(r.Context())); err != nil {
-		log.Printf("access log insert failed: %v", err)
+		slog.Warn("access log insert failed", "err", err)
 	}
 
 	managerEmp, err := h.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 	if err != nil {
-		log.Printf("manager lookup failed: %v", err)
+		slog.Warn("manager lookup failed", "err", err)
 	}
 	isSelf := emp.UserID == user.UserID
 	isManager := managerEmp != nil && emp.ManagerID == managerEmp.ID
@@ -186,12 +186,12 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
     INSERT INTO manager_relations (employee_id, manager_id, start_date)
     VALUES ($1, $2, CURRENT_DATE)
   `, id, payload.ManagerID); err != nil {
-			log.Printf("manager relation insert failed: %v", err)
+			slog.Warn("manager relation insert failed", "err", err)
 		}
 	}
 
 	if err := audit.New(h.Store.DB).Record(r.Context(), user.TenantID, user.UserID, "core.employee.create", "employee", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit core.employee.create failed: %v", err)
+		slog.Warn("audit core.employee.create failed", "err", err)
 	}
 
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
@@ -250,24 +250,24 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
       SET end_date = CURRENT_DATE
       WHERE employee_id = $1 AND end_date IS NULL
     `, employeeID); err != nil {
-			log.Printf("manager relation close failed: %v", err)
+			slog.Warn("manager relation close failed", "err", err)
 		}
 		if payload.ManagerID != "" {
 			if _, err := h.Store.DB.Exec(r.Context(), `
       INSERT INTO manager_relations (employee_id, manager_id, start_date)
       VALUES ($1, $2, CURRENT_DATE)
     `, employeeID, payload.ManagerID); err != nil {
-				log.Printf("manager relation insert failed: %v", err)
+				slog.Warn("manager relation insert failed", "err", err)
 			}
 		}
 
 		if err := audit.New(h.Store.DB).Record(r.Context(), user.TenantID, user.UserID, "core.employee.manager_change", "employee", employeeID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), map[string]any{"managerId": previousManagerID}, map[string]any{"managerId": payload.ManagerID}); err != nil {
-			log.Printf("audit core.employee.manager_change failed: %v", err)
+			slog.Warn("audit core.employee.manager_change failed", "err", err)
 		}
 	}
 
 	if err := audit.New(h.Store.DB).Record(r.Context(), user.TenantID, user.UserID, "core.employee.update", "employee", employeeID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		log.Printf("audit core.employee.update failed: %v", err)
+		slog.Warn("audit core.employee.update failed", "err", err)
 	}
 
 	api.Success(w, map[string]string{"id": employeeID}, middleware.GetRequestID(r.Context()))

@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -87,7 +87,7 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET last_login = now() WHERE id = $1", id); err != nil {
-		log.Printf("update last_login failed for user %s: %v", id, err)
+		slog.Warn("update last_login failed", "userId", id, "err", err)
 	}
 
 	api.Success(w, map[string]any{
@@ -99,7 +99,7 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if user, ok := middleware.GetUser(r.Context()); ok && user.SessionID != "" {
 		if _, err := h.DB.Exec(r.Context(), "DELETE FROM sessions WHERE user_id = $1 AND refresh_token = $2", user.UserID, auth.HashToken(user.SessionID)); err != nil {
-			log.Printf("logout session delete failed for user %s: %v", user.UserID, err)
+			slog.Warn("logout session delete failed", "userId", user.UserID, "err", err)
 		}
 	}
 	api.Success(w, map[string]string{"status": "logged_out"}, requestctx.GetRequestID(r.Context()))
@@ -117,14 +117,14 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		token, err := generateToken()
 		if err != nil {
-			log.Printf("password reset token generation failed for user %s: %v", userID, err)
+			slog.Warn("password reset token generation failed", "userId", userID, "err", err)
 			api.Success(w, map[string]string{"status": "reset_requested"}, requestctx.GetRequestID(r.Context()))
 			return
 		}
 		expires := time.Now().Add(2 * time.Hour)
 		hashed := auth.HashToken(token)
 		if _, err := h.DB.Exec(r.Context(), "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, hashed, expires); err != nil {
-			log.Printf("password reset insert failed for user %s: %v", userID, err)
+			slog.Warn("password reset insert failed", "userId", userID, "err", err)
 		}
 	}
 
@@ -160,7 +160,7 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err := h.DB.Exec(r.Context(), "UPDATE password_resets SET used_at = now() WHERE token = $1", payload.Token); err != nil {
-		log.Printf("password reset mark used failed: %v", err)
+		slog.Warn("password reset mark used failed", "err", err)
 	}
 
 	api.Success(w, map[string]string{"status": "password_reset"}, requestctx.GetRequestID(r.Context()))
