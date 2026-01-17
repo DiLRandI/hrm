@@ -30,12 +30,12 @@ func Load() Config {
 	return Config{
 		Addr:                    getEnv("APP_ADDR", ":8080"),
 		DatabaseURL:             getEnv("DATABASE_URL", ""),
-		JWTSecret:               getEnv("JWT_SECRET", "change-me"),
+		JWTSecret:               getEnv("JWT_SECRET", ""),
 		FrontendDir:             getEnv("FRONTEND_DIR", "frontend/dist"),
 		Environment:             getEnv("APP_ENV", "development"),
 		SeedTenantName:          getEnv("SEED_TENANT_NAME", "Default Tenant"),
-		SeedAdminEmail:          getEnv("SEED_ADMIN_EMAIL", "admin@example.com"),
-		SeedAdminPassword:       getEnv("SEED_ADMIN_PASSWORD", "ChangeMe123!"),
+		SeedAdminEmail:          getEnv("SEED_ADMIN_EMAIL", ""),
+		SeedAdminPassword:       getEnv("SEED_ADMIN_PASSWORD", ""),
 		SeedSystemAdminEmail:    getEnv("SEED_SYSTEM_ADMIN_EMAIL", ""),
 		SeedSystemAdminPassword: getEnv("SEED_SYSTEM_ADMIN_PASSWORD", ""),
 		AllowSelfSignup:         getEnvBool("ALLOW_SELF_SIGNUP", false),
@@ -83,10 +83,10 @@ func (c Config) Validate() error {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
 	if c.Environment == "production" {
-		if strings.TrimSpace(c.JWTSecret) == "" || c.JWTSecret == "change-me" {
+		if strings.TrimSpace(c.JWTSecret) == "" {
 			return fmt.Errorf("JWT_SECRET must be set to a strong value in production")
 		}
-		if c.RunSeed && (strings.TrimSpace(c.SeedAdminPassword) == "" || c.SeedAdminPassword == "ChangeMe123!") {
+		if c.RunSeed && strings.TrimSpace(c.SeedAdminPassword) == "" {
 			return fmt.Errorf("SEED_ADMIN_PASSWORD must be changed or RUN_SEED disabled in production")
 		}
 	}

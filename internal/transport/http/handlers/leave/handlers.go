@@ -1,15 +1,20 @@
 package leavehandler
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/audit"
 	"hrm/internal/domain/leave"
+	"hrm/internal/domain/notifications"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
@@ -30,14 +35,19 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/types", h.handleCreateType)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/policies", h.handleListPolicies)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/policies", h.handleCreatePolicy)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/holidays", h.handleListHolidays)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/holidays", h.handleCreateHoliday)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Delete("/holidays/{holidayID}", h.handleDeleteHoliday)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/balances", h.handleListBalances)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/balances/adjust", h.handleAdjustBalance)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/accrual/run", h.handleRunAccruals)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/requests", h.handleListRequests)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests", h.handleCreateRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveApprove, h.Perms)).Post("/requests/{requestID}/approve", h.handleApproveRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveApprove, h.Perms)).Post("/requests/{requestID}/reject", h.handleRejectRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests/{requestID}/cancel", h.handleCancelRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/calendar", h.handleCalendar)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/calendar/export", h.handleCalendarExport)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/reports/balances", h.handleReportBalances)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/reports/usage", h.handleReportUsage)
 	})
@@ -100,6 +110,7 @@ func (h *Handler) handleCreateType(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusInternalServerError, "leave_type_create_failed", "failed to create leave type", middleware.GetRequestID(r.Context()))
 		return
 	}
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.type.create", "leave_type", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
 
@@ -160,7 +171,115 @@ func (h *Handler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusInternalServerError, "leave_policy_create_failed", "failed to create leave policy", middleware.GetRequestID(r.Context()))
 		return
 	}
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.policy.create", "leave_policy", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+}
+
+type holidayPayload struct {
+	Date   string `json:"date"`
+	Name   string `json:"name"`
+	Region string `json:"region"`
+}
+
+func (h *Handler) handleListHolidays(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+    SELECT id, date, name, region
+    FROM holidays
+    WHERE tenant_id = $1
+    ORDER BY date
+  `, user.TenantID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "holiday_list_failed", "failed to list holidays", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	var out []map[string]any
+	for rows.Next() {
+		var id, name, region string
+		var date time.Time
+		if err := rows.Scan(&id, &date, &name, &region); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "holiday_list_failed", "failed to list holidays", middleware.GetRequestID(r.Context()))
+			return
+		}
+		out = append(out, map[string]any{
+			"id":     id,
+			"date":   date,
+			"name":   name,
+			"region": region,
+		})
+	}
+
+	api.Success(w, out, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleCreateHoliday(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var payload holidayPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	holidayDate, err := shared.ParseDate(payload.Date)
+	if err != nil || holidayDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid date", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if payload.Name == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "name required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var id string
+	err = h.DB.QueryRow(r.Context(), `
+    INSERT INTO holidays (tenant_id, date, name, region)
+    VALUES ($1,$2,$3,$4)
+    RETURNING id
+  `, user.TenantID, holidayDate, payload.Name, payload.Region).Scan(&id)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "holiday_create_failed", "failed to create holiday", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.holiday.create", "holiday", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleDeleteHoliday(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	holidayID := chi.URLParam(r, "holidayID")
+	_, err := h.DB.Exec(r.Context(), "DELETE FROM holidays WHERE tenant_id = $1 AND id = $2", user.TenantID, holidayID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "holiday_delete_failed", "failed to delete holiday", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.holiday.delete", "holiday", holidayID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil)
+	api.Success(w, map[string]string{"status": "deleted"}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
@@ -275,7 +394,34 @@ func (h *Handler) handleAdjustBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, _ = h.DB.Exec(r.Context(), `
+    INSERT INTO leave_balance_adjustments (tenant_id, employee_id, leave_type_id, amount, reason, created_by)
+    VALUES ($1,$2,$3,$4,$5,$6)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.Amount, payload.Reason, user.UserID)
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.balance.adjust", "leave_balance", payload.EmployeeID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
 	api.Success(w, map[string]string{"status": "adjusted"}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleRunAccruals(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	summary, err := leave.ApplyAccruals(r.Context(), h.DB, user.TenantID, time.Now())
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "accrual_failed", "failed to run accruals", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.accrual.run", "leave_policy", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, summary)
+	api.Success(w, summary, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +537,19 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
     ON CONFLICT (employee_id, leave_type_id) DO UPDATE SET pending = leave_balances.pending + EXCLUDED.pending, updated_at = now()
   `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, days)
 
-	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.create", "leave_request", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload)
+	var managerUserID string
+	_ = h.DB.QueryRow(r.Context(), `
+    SELECT m.user_id
+    FROM employees e
+    JOIN employees m ON e.manager_id = m.id
+    WHERE e.tenant_id = $1 AND e.id = $2
+  `, user.TenantID, payload.EmployeeID).Scan(&managerUserID)
+	if managerUserID != "" {
+		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, managerUserID, "leave_submitted", "Leave request submitted", "A leave request is awaiting approval.")
+	}
+
+	api.Created(w, map[string]string{"id": id, "status": leave.StatusPending}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
@@ -427,6 +585,20 @@ func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
     SET pending = pending - $1, used = used + $1, updated_at = now()
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
   `, days, user.TenantID, employeeID, leaveTypeID)
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.approve", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID})
+	var employeeUserID, leaveTypeName string
+	_ = h.DB.QueryRow(r.Context(), `
+    SELECT e.user_id, lt.name
+    FROM employees e
+    JOIN leave_types lt ON lt.id = $2
+    WHERE e.tenant_id = $1 AND e.id = $3
+  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName)
+	if employeeUserID != "" {
+		title := "Leave approved"
+		body := fmt.Sprintf("Your %s leave request was approved.", leaveTypeName)
+		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, "leave_approved", title, body)
+	}
 
 	api.Success(w, map[string]string{"status": leave.StatusApproved}, middleware.GetRequestID(r.Context()))
 }
@@ -464,6 +636,20 @@ func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
     SET pending = pending - $1, updated_at = now()
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
   `, days, user.TenantID, employeeID, leaveTypeID)
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.reject", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID})
+	var employeeUserID, leaveTypeName string
+	_ = h.DB.QueryRow(r.Context(), `
+    SELECT e.user_id, lt.name
+    FROM employees e
+    JOIN leave_types lt ON lt.id = $2
+    WHERE e.tenant_id = $1 AND e.id = $3
+  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName)
+	if employeeUserID != "" {
+		title := "Leave rejected"
+		body := fmt.Sprintf("Your %s leave request was rejected.", leaveTypeName)
+		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, "leave_rejected", title, body)
+	}
 
 	api.Success(w, map[string]string{"status": leave.StatusRejected}, middleware.GetRequestID(r.Context()))
 }
@@ -503,6 +689,20 @@ func (h *Handler) handleCancelRequest(w http.ResponseWriter, r *http.Request) {
     SET pending = pending - $1, updated_at = now()
     WHERE tenant_id = $2 AND employee_id = $3 AND leave_type_id = $4
   `, days, user.TenantID, employeeID, leaveTypeID)
+
+	_ = audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "leave.request.cancel", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID})
+	var employeeUserID, leaveTypeName string
+	_ = h.DB.QueryRow(r.Context(), `
+    SELECT e.user_id, lt.name
+    FROM employees e
+    JOIN leave_types lt ON lt.id = $2
+    WHERE e.tenant_id = $1 AND e.id = $3
+  `, user.TenantID, leaveTypeID, employeeID).Scan(&employeeUserID, &leaveTypeName)
+	if employeeUserID != "" {
+		title := "Leave cancelled"
+		body := fmt.Sprintf("Your %s leave request was cancelled.", leaveTypeName)
+		_ = notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, "leave_cancelled", title, body)
+	}
 
 	api.Success(w, map[string]string{"status": leave.StatusCancelled}, middleware.GetRequestID(r.Context()))
 }
@@ -559,6 +759,86 @@ func (h *Handler) handleCalendar(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	api.Success(w, events, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleCalendarExport(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	format := strings.ToLower(r.URL.Query().Get("format"))
+	if format == "" {
+		format = "csv"
+	}
+
+	query := `
+    SELECT lr.id, lr.employee_id, lt.name, lr.start_date, lr.end_date, lr.status
+    FROM leave_requests lr
+    JOIN leave_types lt ON lr.leave_type_id = lt.id
+    WHERE lr.tenant_id = $1 AND lr.status = ANY($2)
+  `
+	args := []any{user.TenantID, []string{leave.StatusPending, leave.StatusApproved}}
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND lr.employee_id = $3"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND lr.employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $3)"
+		args = append(args, managerEmployeeID)
+	}
+	query += " ORDER BY lr.start_date"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "calendar_failed", "failed to load calendar", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	if format == "ics" {
+		w.Header().Set("Content-Type", "text/calendar")
+		w.Header().Set("Content-Disposition", "attachment; filename=leave-calendar.ics")
+		var builder strings.Builder
+		builder.WriteString("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//PulseHR//Leave Calendar//EN\r\n")
+		for rows.Next() {
+			var id, employeeID, leaveTypeName, status string
+			var startDate, endDate time.Time
+			if err := rows.Scan(&id, &employeeID, &leaveTypeName, &startDate, &endDate, &status); err != nil {
+				api.Fail(w, http.StatusInternalServerError, "calendar_failed", "failed to export calendar", middleware.GetRequestID(r.Context()))
+				return
+			}
+			builder.WriteString("BEGIN:VEVENT\r\n")
+			builder.WriteString(fmt.Sprintf("UID:%s\r\n", id))
+			builder.WriteString(fmt.Sprintf("DTSTART:%s\r\n", startDate.Format("20060102")))
+			builder.WriteString(fmt.Sprintf("DTEND:%s\r\n", endDate.AddDate(0, 0, 1).Format("20060102")))
+			builder.WriteString(fmt.Sprintf("SUMMARY:%s (%s)\r\n", leaveTypeName, status))
+			builder.WriteString("END:VEVENT\r\n")
+		}
+		builder.WriteString("END:VCALENDAR\r\n")
+		_, _ = w.Write([]byte(builder.String()))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv")
+	w.Header().Set("Content-Disposition", "attachment; filename=leave-calendar.csv")
+	writer := csv.NewWriter(w)
+	_ = writer.Write([]string{"id", "employee_id", "leave_type", "start_date", "end_date", "status"})
+	for rows.Next() {
+		var id, employeeID, leaveTypeName, status string
+		var startDate, endDate time.Time
+		if err := rows.Scan(&id, &employeeID, &leaveTypeName, &startDate, &endDate, &status); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "calendar_failed", "failed to export calendar", middleware.GetRequestID(r.Context()))
+			return
+		}
+		_ = writer.Write([]string{id, employeeID, leaveTypeName, startDate.Format("2006-01-02"), endDate.Format("2006-01-02"), status})
+	}
+	writer.Flush()
 }
 
 func (h *Handler) handleReportBalances(w http.ResponseWriter, r *http.Request) {

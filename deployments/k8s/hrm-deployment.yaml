@@ -21,10 +21,19 @@ spec:
             - name: DATABASE_URL
               value: "postgres://hrm:hrm@postgres:5432/hrm?sslmode=disable"
             - name: JWT_SECRET
-              value: "change-me"
+              valueFrom:
+                secretKeyRef:
+                  name: hrm-secrets
+                  key: JWT_SECRET
             - name: APP_ADDR
               value: ":8080"
             - name: SEED_ADMIN_EMAIL
-              value: "admin@example.com"
+              valueFrom:
+                secretKeyRef:
+                  name: hrm-secrets
+                  key: SEED_ADMIN_EMAIL
             - name: SEED_ADMIN_PASSWORD
-              value: "ChangeMe123!"
+              valueFrom:
+                secretKeyRef:
+                  name: hrm-secrets
+                  key: SEED_ADMIN_PASSWORD

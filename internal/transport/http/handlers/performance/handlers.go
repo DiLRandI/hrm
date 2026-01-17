@@ -9,6 +9,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/auth"
+	"hrm/internal/domain/audit"
+	"hrm/internal/domain/notifications"
 	"hrm/internal/domain/performance"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
@@ -28,6 +30,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/performance", func(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/goals", h.handleListGoals)
 		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/goals", h.handleCreateGoal)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Put("/goals/{goalID}", h.handleUpdateGoal)
 		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/goals/{goalID}/comments", h.handleAddGoalComment)
 		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/review-cycles", h.handleListReviewCycles)
 		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/review-cycles", h.handleCreateReviewCycle)
@@ -39,6 +42,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/checkins", h.handleCreateCheckin)
 		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/pips", h.handleListPIPs)
 		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/pips", h.handleCreatePIP)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Put("/pips/{pipID}", h.handleUpdatePIP)
 	})
 }
 

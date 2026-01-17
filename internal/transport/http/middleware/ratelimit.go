@@ -77,10 +77,3 @@ func clientKey(r *http.Request) string {
 func itoa(value int) string {
 	return strconv.Itoa(value)
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
