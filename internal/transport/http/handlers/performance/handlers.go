@@ -11,6 +11,7 @@ import (
 	"hrm/internal/domain/performance"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
+	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
@@ -77,10 +78,30 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload performance.Goal
+	var payload struct {
+		EmployeeID  string  `json:"employeeId"`
+		ManagerID   string  `json:"managerId"`
+		Title       string  `json:"title"`
+		Description string  `json:"description"`
+		Metric      string  `json:"metric"`
+		Weight      float64 `json:"weight"`
+		DueDate     string  `json:"dueDate"`
+		Status      string  `json:"status"`
+		Progress    float64 `json:"progress"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
+	}
+
+	var dueDate any
+	if payload.DueDate != "" {
+		parsed, err := shared.ParseDate(payload.DueDate)
+		if err != nil {
+			api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid due date", middleware.GetRequestID(r.Context()))
+			return
+		}
+		dueDate = parsed
 	}
 
 	var id string
@@ -88,7 +109,7 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
     INSERT INTO goals (tenant_id, employee_id, manager_id, title, description, metric, due_date, weight, status, progress)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
     RETURNING id
-  `, user.TenantID, payload.EmployeeID, payload.ManagerID, payload.Title, payload.Description, payload.Metric, payload.DueDate, payload.Weight, payload.Status, payload.Progress).Scan(&id)
+  `, user.TenantID, payload.EmployeeID, payload.ManagerID, payload.Title, payload.Description, payload.Metric, dueDate, payload.Weight, payload.Status, payload.Progress).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "goal_create_failed", "failed to create goal", middleware.GetRequestID(r.Context()))
 		return
@@ -165,18 +186,34 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var payload performance.ReviewCycle
+	var payload struct {
+		Name      string `json:"name"`
+		StartDate string `json:"startDate"`
+		EndDate   string `json:"endDate"`
+		Status    string `json:"status"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
 
+	startDate, err := shared.ParseDate(payload.StartDate)
+	if err != nil || startDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid start date", middleware.GetRequestID(r.Context()))
+		return
+	}
+	endDate, err := shared.ParseDate(payload.EndDate)
+	if err != nil || endDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid end date", middleware.GetRequestID(r.Context()))
+		return
+	}
+
 	var id string
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(r.Context(), `
     INSERT INTO review_cycles (tenant_id, name, start_date, end_date, status)
     VALUES ($1,$2,$3,$4,$5)
     RETURNING id
-  `, user.TenantID, payload.Name, payload.StartDate, payload.EndDate, payload.Status).Scan(&id)
+  `, user.TenantID, payload.Name, startDate, endDate, payload.Status).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "review_cycle_create_failed", "failed to create review cycle", middleware.GetRequestID(r.Context()))
 		return

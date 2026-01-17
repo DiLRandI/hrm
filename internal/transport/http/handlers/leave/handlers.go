@@ -11,6 +11,7 @@ import (
 	"hrm/internal/domain/leave"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
+	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
@@ -291,6 +292,14 @@ func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	api.Success(w, requests, middleware.GetRequestID(r.Context()))
 }
 
+type leaveRequestPayload struct {
+	EmployeeID  string `json:"employeeId"`
+	LeaveTypeID string `json:"leaveTypeId"`
+	StartDate   string `json:"startDate"`
+	EndDate     string `json:"endDate"`
+	Reason      string `json:"reason"`
+}
+
 func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
@@ -298,7 +307,7 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload leave.LeaveRequest
+	var payload leaveRequestPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
@@ -310,7 +319,18 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		payload.EmployeeID = selfEmployeeID
 	}
 
-	days, err := leave.CalculateDays(payload.StartDate, payload.EndDate)
+	startDate, err := shared.ParseDate(payload.StartDate)
+	if err != nil || startDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid start date", middleware.GetRequestID(r.Context()))
+		return
+	}
+	endDate, err := shared.ParseDate(payload.EndDate)
+	if err != nil || endDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid end date", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	days, err := leave.CalculateDays(startDate, endDate)
 	if err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_dates", "invalid date range", middleware.GetRequestID(r.Context()))
 		return
@@ -321,7 +341,7 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
     INSERT INTO leave_requests (tenant_id, employee_id, leave_type_id, start_date, end_date, days, reason)
     VALUES ($1,$2,$3,$4,$5,$6,$7)
     RETURNING id
-  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.StartDate, payload.EndDate, days, payload.Reason).Scan(&id)
+  `, user.TenantID, payload.EmployeeID, payload.LeaveTypeID, startDate, endDate, days, payload.Reason).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "leave_request_failed", "failed to create request", middleware.GetRequestID(r.Context()))
 		return

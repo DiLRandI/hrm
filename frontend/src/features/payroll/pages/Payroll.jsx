@@ -59,7 +59,7 @@ export default function Payroll() {
 
       {error && <div className="error">{error}</div>}
 
-      {user?.role === 'HR' && (
+      {(user?.role || user?.RoleName) === 'HR' && (
         <form className="inline-form" onSubmit={createPeriod}>
           <input placeholder="Schedule ID" value={form.scheduleId} onChange={(e) => setForm({ ...form, scheduleId: e.target.value })} />
           <input type="date" value={form.startDate} onChange={(e) => setForm({ ...form, startDate: e.target.value })} />
@@ -79,7 +79,7 @@ export default function Payroll() {
             <span>{period.startDate?.slice(0, 10)} → {period.endDate?.slice(0, 10)}</span>
             <span>{period.status}</span>
             <span className="row-actions">
-              {user?.role === 'HR' && (
+              {(user?.role || user?.RoleName) === 'HR' && (
                 <>
                   <button onClick={() => runPayroll(period.id)}>Run</button>
                   <button onClick={() => finalizePayroll(period.id)}>Finalize</button>

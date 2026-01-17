@@ -49,7 +49,7 @@ export default function Employees() {
 
       {error && <div className="error">{error}</div>}
 
-      {user?.role === 'HR' && (
+      {(user?.role || user?.RoleName) === 'HR' && (
         <form className="inline-form" onSubmit={handleSubmit}>
           <input placeholder="First name" value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} />
           <input placeholder="Last name" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} />

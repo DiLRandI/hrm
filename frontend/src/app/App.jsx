@@ -18,7 +18,7 @@ function AppShell() {
     return <Navigate to="/login" replace />;
   }
 
-  const role = user.role || 'Employee';
+  const role = user?.role || user?.RoleName || 'Employee';
 
   return (
     <div className="app-shell">

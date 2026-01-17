@@ -11,6 +11,7 @@ import (
 	"hrm/internal/domain/payroll"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
+	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
@@ -44,6 +45,12 @@ type PayrollPeriod struct {
 	StartDate  time.Time `json:"startDate"`
 	EndDate    time.Time `json:"endDate"`
 	Status     string    `json:"status"`
+}
+
+type payrollPeriodPayload struct {
+	ScheduleID string `json:"scheduleId"`
+	StartDate  string `json:"startDate"`
+	EndDate    string `json:"endDate"`
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -108,7 +115,7 @@ func (h *Handler) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id string
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(r.Context(), `
     INSERT INTO pay_schedules (tenant_id, name, frequency, pay_day)
     VALUES ($1,$2,$3,$4)
     RETURNING id
@@ -167,7 +174,7 @@ func (h *Handler) handleCreateElement(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id string
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(r.Context(), `
     INSERT INTO pay_elements (tenant_id, name, element_type, calc_type, amount, taxable)
     VALUES ($1,$2,$3,$4,$5,$6)
     RETURNING id
@@ -221,9 +228,20 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload PayrollPeriod
+	var payload payrollPeriodPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	startDate, err := shared.ParseDate(payload.StartDate)
+	if err != nil || startDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid start date", middleware.GetRequestID(r.Context()))
+		return
+	}
+	endDate, err := shared.ParseDate(payload.EndDate)
+	if err != nil || endDate.IsZero() {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid end date", middleware.GetRequestID(r.Context()))
 		return
 	}
 
@@ -232,7 +250,7 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
     INSERT INTO payroll_periods (tenant_id, schedule_id, start_date, end_date)
     VALUES ($1,$2,$3,$4)
     RETURNING id
-  `, user.TenantID, payload.ScheduleID, payload.StartDate, payload.EndDate).Scan(&id)
+  `, user.TenantID, payload.ScheduleID, startDate, endDate).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_period_create_failed", "failed to create period", middleware.GetRequestID(r.Context()))
 		return

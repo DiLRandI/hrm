@@ -10,9 +10,9 @@ export default function Reports() {
   useEffect(() => {
     const load = async () => {
       try {
-        if (user?.role === 'HR') {
+        if ((user?.role || user?.RoleName) === 'HR') {
           setData(await api.get('/reports/dashboard/hr'));
-        } else if (user?.role === 'Manager') {
+        } else if ((user?.role || user?.RoleName) === 'Manager') {
           setData(await api.get('/reports/dashboard/manager'));
         } else {
           setData(await api.get('/reports/dashboard/employee'));

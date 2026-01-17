@@ -49,7 +49,12 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.Success(w, map[string]any{
-		"user":     user,
+		"user": map[string]string{
+			"id":       user.UserID,
+			"tenantId": user.TenantID,
+			"roleId":   user.RoleID,
+			"role":     user.RoleName,
+		},
 		"employee": emp,
 	}, middleware.GetRequestID(r.Context()))
 }

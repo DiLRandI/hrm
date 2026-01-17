@@ -10,9 +10,9 @@ export default function Dashboard() {
   useEffect(() => {
     const load = async () => {
       try {
-        if (user?.role === 'HR') {
+        if ((user?.role || user?.RoleName) === 'HR') {
           setData(await api.get('/reports/dashboard/hr'));
-        } else if (user?.role === 'Manager') {
+        } else if ((user?.role || user?.RoleName) === 'Manager') {
           setData(await api.get('/reports/dashboard/manager'));
         } else {
           setData(await api.get('/reports/dashboard/employee'));
@@ -28,7 +28,7 @@ export default function Dashboard() {
     <section className="page">
       <header className="page-header">
         <div>
-          <h2>Welcome back, {employee?.firstName || user?.role}</h2>
+          <h2>Welcome back, {employee?.firstName || (user?.role || user?.RoleName)}</h2>
           <p>Here’s your live snapshot across leave, payroll, and performance.</p>
         </div>
       </header>
