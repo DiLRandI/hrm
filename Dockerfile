@@ -8,7 +8,7 @@ COPY frontend ./
 RUN npm run build
 
 # Build backend
-FROM golang:1.22-alpine AS backend
+FROM golang:1.25-alpine AS backend
 WORKDIR /app
 COPY go.mod .
 COPY cmd ./cmd
@@ -17,7 +17,7 @@ COPY migrations ./migrations
 RUN go build -o /app/hrm ./cmd/server
 
 # Final image
-FROM alpine:3.19
+FROM alpine:latest
 WORKDIR /app
 RUN adduser -D appuser
 COPY --from=backend /app/hrm /app/hrm
