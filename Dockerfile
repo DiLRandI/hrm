@@ -11,10 +11,11 @@ RUN npm run build
 FROM golang:1.25-alpine AS backend
 WORKDIR /app
 COPY go.mod .
+COPY go.sum .
 COPY cmd ./cmd
 COPY internal ./internal
 COPY migrations ./migrations
-RUN go build -o /app/hrm ./cmd/server
+RUN go build -v -ldflags="-s -w" -o /app/hrm ./cmd/server
 
 # Final image
 FROM alpine:latest
