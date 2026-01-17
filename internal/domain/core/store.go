@@ -52,7 +52,13 @@ func (s *Store) GetEmployee(ctx context.Context, tenantID, employeeID string) (*
 }
 
 func (s *Store) GetEmployeeByUserID(ctx context.Context, tenantID, userID string) (*Employee, error) {
-	row := s.DB.QueryRow(ctx, `\n    SELECT id, user_id, employee_number, first_name, last_name, email, phone, date_of_birth,\n           address, national_id, bank_account, salary, currency, employment_type,\n           department_id, manager_id, start_date, end_date, status, created_at, updated_at\n    FROM employees\n    WHERE tenant_id = $1 AND user_id = $2\n  `, tenantID, userID)
+	row := s.DB.QueryRow(ctx, `
+    SELECT id, user_id, employee_number, first_name, last_name, email, phone, date_of_birth,
+           address, national_id, bank_account, salary, currency, employment_type,
+           department_id, manager_id, start_date, end_date, status, created_at, updated_at
+    FROM employees
+    WHERE tenant_id = $1 AND user_id = $2
+  `, tenantID, userID)
 
 	var emp Employee
 	if err := row.Scan(
@@ -68,7 +74,11 @@ func (s *Store) GetEmployeeByUserID(ctx context.Context, tenantID, userID string
 
 func (s *Store) IsManagerOf(ctx context.Context, tenantID, managerEmployeeID, employeeID string) (bool, error) {
 	var count int
-	err := s.DB.QueryRow(ctx, `\n    SELECT COUNT(1)\n    FROM employees\n    WHERE tenant_id = $1 AND id = $2 AND manager_id = $3\n  `, tenantID, employeeID, managerEmployeeID).Scan(&count)
+	err := s.DB.QueryRow(ctx, `
+    SELECT COUNT(1)
+    FROM employees
+    WHERE tenant_id = $1 AND id = $2 AND manager_id = $3
+  `, tenantID, employeeID, managerEmployeeID).Scan(&count)
 	if err != nil {
 		return false, err
 	}
