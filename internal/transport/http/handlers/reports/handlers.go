@@ -1,4 +1,4 @@
-package reports
+package reportshandler
 
 import (
 	"net/http"
@@ -6,8 +6,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/api"
-	"hrm/internal/middleware"
+	"hrm/internal/domain/reports"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -45,7 +46,7 @@ func (h *Handler) handleEmployeeDashboard(w http.ResponseWriter, r *http.Request
 	var goalCount int
 	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&goalCount)
 
-	api.Success(w, EmployeeDashboard(leaveBalance, payslipCount, goalCount), middleware.GetRequestID(r.Context()))
+	api.Success(w, reports.EmployeeDashboard(leaveBalance, payslipCount, goalCount), middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +68,7 @@ func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request)
 	var reviewTasks int
 	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_tasks WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&reviewTasks)
 
-	api.Success(w, ManagerDashboard(pendingApprovals, teamGoals, reviewTasks), middleware.GetRequestID(r.Context()))
+	api.Success(w, reports.ManagerDashboard(pendingApprovals, teamGoals, reviewTasks), middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
@@ -86,5 +87,5 @@ func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
 	var reviewCycles int
 	_ = h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_cycles WHERE tenant_id = $1", user.TenantID).Scan(&reviewCycles)
 
-	api.Success(w, HRDashboard(payrollPeriods, leavePending, reviewCycles), middleware.GetRequestID(r.Context()))
+	api.Success(w, reports.HRDashboard(payrollPeriods, leavePending, reviewCycles), middleware.GetRequestID(r.Context()))
 }

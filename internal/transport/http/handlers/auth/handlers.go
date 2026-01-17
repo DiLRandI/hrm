@@ -1,4 +1,4 @@
-package auth
+package authhandler
 
 import (
 	"crypto/rand"
@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/api"
-	"hrm/internal/requestctx"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/platform/requestctx"
 )
 
 type Handler struct {

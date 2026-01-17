@@ -1,4 +1,4 @@
-package core
+package corehandler
 
 import (
 	"encoding/json"
@@ -6,15 +6,16 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"hrm/internal/api"
-	"hrm/internal/middleware"
+	"hrm/internal/domain/core"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
-	Store *Store
+	Store *core.Store
 }
 
-func NewHandler(store *Store) *Handler {
+func NewHandler(store *core.Store) *Handler {
 	return &Handler{Store: store}
 }
 
@@ -41,10 +42,10 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	emp, err := h.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+	emp, err := h.Store.Getcore.EmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 	if err == nil {
 		isSelf := true
-		FilterEmployeeFields(emp, user, isSelf, false)
+		core.FilterEmployeeFields(emp, user, isSelf, false)
 	}
 
 	api.Success(w, map[string]any{
@@ -60,32 +61,32 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employees, err := h.Store.ListEmployees(r.Context(), user.TenantID)
+	employees, err := h.Store.Listcore.Employees(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "employee_list_failed", "failed to list employees", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	var managerEmployeeID string
+	var managercore.EmployeeID string
 	if user.RoleName == "Manager" {
-		managerEmp, err := h.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+		managerEmp, err := h.Store.Getcore.EmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 		if err == nil {
-			managerEmployeeID = managerEmp.ID
+			managercore.EmployeeID = managerEmp.ID
 		}
 	}
 
-	filtered := make([]Employee, 0, len(employees))
+	filtered := make([]core.Employee, 0, len(employees))
 	for _, emp := range employees {
-		if user.RoleName == "Manager" && managerEmployeeID != "" && emp.ManagerID != managerEmployeeID && emp.UserID != user.UserID {
+		if user.RoleName == "Manager" && managercore.EmployeeID != "" && emp.ManagerID != managercore.EmployeeID && emp.UserID != user.UserID {
 			continue
 		}
-		if user.RoleName == "Employee" && emp.UserID != user.UserID {
+		if user.RoleName == "core.Employee" && emp.UserID != user.UserID {
 			continue
 		}
 
 		isSelf := emp.UserID == user.UserID
-		isManager := emp.ManagerID == managerEmployeeID
-		FilterEmployeeFields(&emp, user, isSelf, isManager)
+		isManager := emp.ManagerID == managercore.EmployeeID
+		core.FilterEmployeeFields(&emp, user, isSelf, isManager)
 		filtered = append(filtered, emp)
 	}
 
@@ -100,7 +101,7 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	employeeID := chi.URLParam(r, "employeeID")
-	emp, err := h.Store.GetEmployee(r.Context(), user.TenantID, employeeID)
+	emp, err := h.Store.Getcore.Employee(r.Context(), user.TenantID, employeeID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
 		return
@@ -111,10 +112,10 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
     VALUES ($1,$2,$3,$4,$5)
   `, user.TenantID, user.UserID, employeeID, []string{"employee_profile"}, middleware.GetRequestID(r.Context()))
 
-	managerEmp, _ := h.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+	managerEmp, _ := h.Store.Getcore.EmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 	isSelf := emp.UserID == user.UserID
 	isManager := managerEmp != nil && emp.ManagerID == managerEmp.ID
-	if user.RoleName == "Employee" && !isSelf {
+	if user.RoleName == "core.Employee" && !isSelf {
 		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -123,7 +124,7 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	FilterEmployeeFields(emp, user, isSelf, isManager)
+	core.FilterEmployeeFields(emp, user, isSelf, isManager)
 	api.Success(w, emp, middleware.GetRequestID(r.Context()))
 }
 
@@ -138,13 +139,13 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload Employee
+	var payload core.Employee
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	id, err := h.Store.CreateEmployee(r.Context(), user.TenantID, payload)
+	id, err := h.Store.Createcore.Employee(r.Context(), user.TenantID, payload)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "employee_create_failed", "failed to create employee", middleware.GetRequestID(r.Context()))
 		return
@@ -161,13 +162,13 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	employeeID := chi.URLParam(r, "employeeID")
-	existing, err := h.Store.GetEmployee(r.Context(), user.TenantID, employeeID)
+	existing, err := h.Store.Getcore.Employee(r.Context(), user.TenantID, employeeID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	var payload Employee
+	var payload core.Employee
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
@@ -178,7 +179,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 			return
 		}
-		payload.EmployeeNumber = existing.EmployeeNumber
+		payload.core.EmployeeNumber = existing.core.EmployeeNumber
 		payload.FirstName = existing.FirstName
 		payload.LastName = existing.LastName
 		payload.Email = existing.Email
@@ -187,14 +188,14 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		payload.Salary = existing.Salary
 		payload.Currency = existing.Currency
 		payload.EmploymentType = existing.EmploymentType
-		payload.DepartmentID = existing.DepartmentID
+		payload.core.DepartmentID = existing.core.DepartmentID
 		payload.ManagerID = existing.ManagerID
 		payload.StartDate = existing.StartDate
 		payload.EndDate = existing.EndDate
 		payload.Status = existing.Status
 	}
 
-	if err := h.Store.UpdateEmployee(r.Context(), user.TenantID, employeeID, payload); err != nil {
+	if err := h.Store.Updatecore.Employee(r.Context(), user.TenantID, employeeID, payload); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "employee_update_failed", "failed to update employee", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -221,9 +222,9 @@ func (h *Handler) handleListDepartments(w http.ResponseWriter, r *http.Request) 
 	}
 	defer rows.Close()
 
-	var departments []Department
+	var departments []core.Department
 	for rows.Next() {
-		var dep Department
+		var dep core.Department
 		if err := rows.Scan(&dep.ID, &dep.Name, &dep.ParentID, &dep.ManagerID, &dep.CreatedAt); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "department_list_failed", "failed to list departments", middleware.GetRequestID(r.Context()))
 			return
@@ -245,7 +246,7 @@ func (h *Handler) handleCreateDepartment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var payload Department
+	var payload core.Department
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return

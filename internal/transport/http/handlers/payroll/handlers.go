@@ -1,4 +1,4 @@
-package payroll
+package payrollhandler
 
 import (
 	"encoding/json"
@@ -8,8 +8,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/api"
-	"hrm/internal/middleware"
+	"hrm/internal/domain/payroll"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -358,7 +359,7 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		var inputs []InputLine
+		var inputs []payroll.InputLine
 		for inputRows.Next() {
 			var etype string
 			var amount float64
@@ -367,11 +368,11 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 				api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to process inputs", middleware.GetRequestID(r.Context()))
 				return
 			}
-			inputs = append(inputs, InputLine{Type: etype, Amount: amount})
+			inputs = append(inputs, payroll.InputLine{Type: etype, Amount: amount})
 		}
 		inputRows.Close()
 
-		gross, deductions, net := ComputePayroll(salary, inputs)
+		gross, deductions, net := payroll.ComputePayroll(salary, inputs)
 
 		_, _ = h.DB.Exec(r.Context(), `
       INSERT INTO payroll_results (tenant_id, period_id, employee_id, gross, deductions, net, currency)

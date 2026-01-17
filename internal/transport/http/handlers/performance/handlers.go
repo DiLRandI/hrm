@@ -1,4 +1,4 @@
-package performance
+package performancehandler
 
 import (
 	"encoding/json"
@@ -8,8 +8,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/api"
-	"hrm/internal/middleware"
+	"hrm/internal/domain/performance"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -20,7 +21,7 @@ func NewHandler(db *pgxpool.Pool) *Handler {
 	return &Handler{DB: db}
 }
 
-type Goal struct {
+type performance.Goal struct {
 	ID          string    `json:"id"`
 	EmployeeID  string    `json:"employeeId"`
 	ManagerID   string    `json:"managerId"`
@@ -33,7 +34,7 @@ type Goal struct {
 	Progress    float64   `json:"progress"`
 }
 
-type ReviewCycle struct {
+type performance.ReviewCycle struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	StartDate time.Time `json:"startDate"`
@@ -78,9 +79,9 @@ func (h *Handler) handleListGoals(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var goals []Goal
+	var goals []performance.Goal
 	for rows.Next() {
-		var g Goal
+		var g performance.Goal
 		if err := rows.Scan(&g.ID, &g.EmployeeID, &g.ManagerID, &g.Title, &g.Description, &g.Metric, &g.DueDate, &g.Weight, &g.Status, &g.Progress); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "goal_list_failed", "failed to list goals", middleware.GetRequestID(r.Context()))
 			return
@@ -97,7 +98,7 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload Goal
+	var payload performance.Goal
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
@@ -162,9 +163,9 @@ func (h *Handler) handleListReviewCycles(w http.ResponseWriter, r *http.Request)
 	}
 	defer rows.Close()
 
-	var cycles []ReviewCycle
+	var cycles []performance.ReviewCycle
 	for rows.Next() {
-		var c ReviewCycle
+		var c performance.ReviewCycle
 		if err := rows.Scan(&c.ID, &c.Name, &c.StartDate, &c.EndDate, &c.Status); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "review_cycle_failed", "failed to list review cycles", middleware.GetRequestID(r.Context()))
 			return
@@ -185,7 +186,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var payload ReviewCycle
+	var payload performance.ReviewCycle
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
@@ -296,9 +297,9 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 	var feedbacks []map[string]any
 	for rows.Next() {
 		var id, fromUser, toEmployee, ftype, message string
-		var relatedGoal any
+		var relatedperformance.Goal any
 		var created time.Time
-		if err := rows.Scan(&id, &fromUser, &toEmployee, &ftype, &message, &relatedGoal, &created); err != nil {
+		if err := rows.Scan(&id, &fromUser, &toEmployee, &ftype, &message, &relatedperformance.Goal, &created); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "feedback_list_failed", "failed to list feedback", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -308,7 +309,7 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 			"toEmployeeId":  toEmployee,
 			"type":          ftype,
 			"message":       message,
-			"relatedGoalId": relatedGoal,
+			"relatedperformance.GoalId": relatedperformance.Goal,
 			"createdAt":     created,
 		})
 	}
@@ -326,7 +327,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 		ToEmployeeID string `json:"toEmployeeId"`
 		Type         string `json:"type"`
 		Message      string `json:"message"`
-		RelatedGoal  string `json:"relatedGoalId"`
+		Relatedperformance.Goal  string `json:"relatedperformance.GoalId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
@@ -336,7 +337,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 	_, err := h.DB.Exec(r.Context(), `
     INSERT INTO feedback (tenant_id, from_user_id, to_employee_id, type, message, related_goal_id)
     VALUES ($1,$2,$3,$4,$5,$6)
-  `, user.TenantID, user.UserID, payload.ToEmployeeID, payload.Type, payload.Message, nullIfEmpty(payload.RelatedGoal))
+  `, user.TenantID, user.UserID, payload.ToEmployeeID, payload.Type, payload.Message, nullIfEmpty(payload.Relatedperformance.Goal))
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "feedback_create_failed", "failed to create feedback", middleware.GetRequestID(r.Context()))
 		return

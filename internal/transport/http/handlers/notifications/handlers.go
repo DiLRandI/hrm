@@ -1,4 +1,4 @@
-package notifications
+package notificationshandler
 
 import (
 	"net/http"

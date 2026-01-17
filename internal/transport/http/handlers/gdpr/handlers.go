@@ -1,4 +1,4 @@
-package gdpr
+package gdprhandler
 
 import (
 	"context"
@@ -11,8 +11,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"hrm/internal/api"
-	"hrm/internal/middleware"
+	"hrm/internal/domain/gdpr"
+	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -234,7 +235,7 @@ func (h *Handler) generateDSAR(ctx context.Context, tenantID, employeeID, export
 	}
 	rows.Close()
 
-	payload := BuildDSARPayload(employee, leaveRequests, payrollResults, goals)
+	payload := gdpr.BuildDSARPayload(employee, leaveRequests, payrollResults, goals)
 	jsonBytes, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", err
