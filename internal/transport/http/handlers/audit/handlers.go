@@ -8,8 +8,8 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
+	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
@@ -17,12 +17,12 @@ import (
 )
 
 type Handler struct {
-	DB    *pgxpool.Pool
-	Perms middleware.PermissionStore
+	Service *audit.Service
+	Perms   middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
-	return &Handler{DB: db, Perms: perms}
+func NewHandler(service *audit.Service, perms middleware.PermissionStore) *Handler {
+	return &Handler{Service: service, Perms: perms}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -44,106 +44,20 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	entity := r.URL.Query().Get("entityType")
 	actor := r.URL.Query().Get("actorUserId")
 	includeDetails := r.URL.Query().Get("includeDetails") == "true"
-
-	query := `
-    SELECT id, actor_user_id, action, entity_type, entity_id, request_id, ip, created_at`
-	if includeDetails {
-		query += ", before_json, after_json"
-	}
-	query += `
-    FROM audit_events
-    WHERE tenant_id = $1`
-	args := []any{user.TenantID}
-	if action != "" {
-		query += fmt.Sprintf(" AND action = $%d", len(args)+1)
-		args = append(args, action)
-	}
-	if entity != "" {
-		query += fmt.Sprintf(" AND entity_type = $%d", len(args)+1)
-		args = append(args, entity)
-	}
-	if actor != "" {
-		query += fmt.Sprintf(" AND actor_user_id::text = $%d", len(args)+1)
-		args = append(args, actor)
-	}
-
-	countQuery := "SELECT COUNT(1) FROM audit_events WHERE tenant_id = $1"
-	if action != "" {
-		countQuery += " AND action = $2"
-		if entity != "" {
-			countQuery += " AND entity_type = $3"
-			if actor != "" {
-				countQuery += " AND actor_user_id::text = $4"
-			}
-		} else if actor != "" {
-			countQuery += " AND actor_user_id::text = $3"
-		}
-	} else if entity != "" {
-		countQuery += " AND entity_type = $2"
-		if actor != "" {
-			countQuery += " AND actor_user_id::text = $3"
-		}
-	} else if actor != "" {
-		countQuery += " AND actor_user_id::text = $2"
-	}
-	var total int
-	if err := h.DB.QueryRow(r.Context(), countQuery, args...).Scan(&total); err != nil {
+	filter := audit.Filter{Action: action, EntityType: entity, ActorUser: actor}
+	total, err := h.Service.Count(r.Context(), user.TenantID, filter)
+	if err != nil {
 		slog.Warn("audit count failed", "err", err)
 	}
 
-	limitPos := len(args) + 1
-	offsetPos := len(args) + 2
-	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
-	args = append(args, page.Limit, page.Offset)
-
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	events, err := h.Service.List(r.Context(), user.TenantID, filter, includeDetails, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "audit_list_failed", "failed to list audit events", middleware.GetRequestID(r.Context()))
 		return
 	}
-	defer rows.Close()
 
-	var out []map[string]any
-	for rows.Next() {
-		var id, actorID, actionVal, entityType, entityID, requestID, ip string
-		var createdAt any
-		if includeDetails {
-			var beforeJSON, afterJSON any
-			if err := rows.Scan(&id, &actorID, &actionVal, &entityType, &entityID, &requestID, &ip, &createdAt, &beforeJSON, &afterJSON); err != nil {
-				api.Fail(w, http.StatusInternalServerError, "audit_list_failed", "failed to list audit events", middleware.GetRequestID(r.Context()))
-				return
-			}
-			out = append(out, map[string]any{
-				"id":         id,
-				"actorId":    actorID,
-				"action":     actionVal,
-				"entityType": entityType,
-				"entityId":   entityID,
-				"requestId":  requestID,
-				"ip":         ip,
-				"createdAt":  createdAt,
-				"before":     beforeJSON,
-				"after":      afterJSON,
-			})
-		} else {
-			if err := rows.Scan(&id, &actorID, &actionVal, &entityType, &entityID, &requestID, &ip, &createdAt); err != nil {
-				api.Fail(w, http.StatusInternalServerError, "audit_list_failed", "failed to list audit events", middleware.GetRequestID(r.Context()))
-				return
-			}
-			out = append(out, map[string]any{
-				"id":         id,
-				"actorId":    actorID,
-				"action":     actionVal,
-				"entityType": entityType,
-				"entityId":   entityID,
-				"requestId":  requestID,
-				"ip":         ip,
-				"createdAt":  createdAt,
-			})
-		}
-	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	api.Success(w, out, middleware.GetRequestID(r.Context()))
+	api.Success(w, events, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleExportEvents(w http.ResponseWriter, r *http.Request) {
@@ -153,17 +67,11 @@ func (h *Handler) handleExportEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
-    SELECT id, actor_user_id, action, entity_type, entity_id, request_id, ip, created_at
-    FROM audit_events
-    WHERE tenant_id = $1
-    ORDER BY created_at DESC
-  `, user.TenantID)
+	events, err := h.Service.ListExport(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "audit_export_failed", "failed to export audit events", middleware.GetRequestID(r.Context()))
 		return
 	}
-	defer rows.Close()
 
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=audit-events.csv")
@@ -171,14 +79,8 @@ func (h *Handler) handleExportEvents(w http.ResponseWriter, r *http.Request) {
 	if err := writer.Write([]string{"id", "actor_user_id", "action", "entity_type", "entity_id", "request_id", "ip", "created_at"}); err != nil {
 		slog.Warn("audit export header failed", "err", err)
 	}
-	for rows.Next() {
-		var id, actorID, actionVal, entityType, entityID, requestID, ip string
-		var createdAt any
-		if err := rows.Scan(&id, &actorID, &actionVal, &entityType, &entityID, &requestID, &ip, &createdAt); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "audit_export_failed", "failed to export audit events", middleware.GetRequestID(r.Context()))
-			return
-		}
-		if err := writer.Write([]string{id, actorID, actionVal, entityType, entityID, requestID, ip, fmt.Sprint(createdAt)}); err != nil {
+	for _, evt := range events {
+		if err := writer.Write([]string{evt.ID, evt.ActorID, evt.Action, evt.EntityType, evt.EntityID, evt.RequestID, evt.IP, fmt.Sprint(evt.CreatedAt)}); err != nil {
 			slog.Warn("audit export row failed", "err", err)
 		}
 	}

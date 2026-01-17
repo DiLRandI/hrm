@@ -88,6 +88,22 @@ func (s *Service) List(ctx context.Context, tenantID, userID string, limit, offs
 	return out, nil
 }
 
+func (s *Service) Count(ctx context.Context, tenantID, userID string) (int, error) {
+	var total int
+	if err := s.DB.QueryRow(ctx, "SELECT COUNT(1) FROM notifications WHERE tenant_id = $1 AND user_id = $2", tenantID, userID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Service) MarkRead(ctx context.Context, tenantID, userID, notificationID string) error {
+	_, err := s.DB.Exec(ctx, `
+    UPDATE notifications SET read_at = now()
+    WHERE tenant_id = $1 AND user_id = $2 AND id = $3
+  `, tenantID, userID, notificationID)
+	return err
+}
+
 func (s *Service) getEmailSettings(ctx context.Context, tenantID string) (bool, string) {
 	var enabled bool
 	var from string

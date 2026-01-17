@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"hrm/internal/domain/audit"
 	"hrm/internal/domain/core"
 	"hrm/internal/domain/notifications"
 	"hrm/internal/platform/config"
@@ -174,7 +175,7 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 		coreHandler := corehandler.NewHandler(coreStore)
 		coreHandler.RegisterRoutes(r)
 
-		auditHandler := audithandler.NewHandler(pool, coreStore)
+		auditHandler := audithandler.NewHandler(audit.New(pool), coreStore)
 		auditHandler.RegisterRoutes(r)
 
 		leaveHandler := leavehandler.NewHandler(pool, coreStore, notifySvc, jobsSvc)

@@ -10,6 +10,7 @@ Start: 2026-01-17
 - 2026-01-17: Added pagination across key list endpoints and UI surfaces (employees, leave requests, DSAR/access logs, audit).
 - 2026-01-17: Expanded tests with backend journey coverage, BOLA guard checks, and frontend workflow tests; added Playwright smoke E2E.
 - 2026-01-17: Added toast notifications and HR-only route guard for the audit screen.
+- 2026-01-17: Began backend refactor by moving audit and notifications DB access into domain services.
 
 ## Decisions
 - Tenancy: single-tenant per deployment with `tenant_id` column reserved for future multi-tenant support.

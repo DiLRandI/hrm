@@ -40,8 +40,8 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := shared.ParsePagination(r, 100, 500)
-	var total int
-	if err := h.Service.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM notifications WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&total); err != nil {
+	total, err := h.Service.Count(r.Context(), user.TenantID, user.UserID)
+	if err != nil {
 		slog.Warn("notification count failed", "err", err)
 	}
 
@@ -63,11 +63,7 @@ func (h *Handler) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	notificationID := chi.URLParam(r, "notificationID")
-	_, err := h.Service.DB.Exec(r.Context(), `
-    UPDATE notifications SET read_at = now()
-    WHERE tenant_id = $1 AND user_id = $2 AND id = $3
-  `, user.TenantID, user.UserID, notificationID)
-	if err != nil {
+	if err := h.Service.MarkRead(r.Context(), user.TenantID, user.UserID, notificationID); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "notification_update_failed", "failed to update notification", middleware.GetRequestID(r.Context()))
 		return
 	}
