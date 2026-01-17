@@ -13,6 +13,7 @@ import (
 	"hrm/internal/domain/core"
 	"hrm/internal/platform/requestctx"
 	"hrm/internal/transport/http/api"
+	"hrm/internal/transport/http/middleware"
 )
 
 type Handler struct {
@@ -64,7 +65,14 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.GenerateToken(h.Secret, auth.Claims{UserID: id, TenantID: tenantID, RoleID: roleID, RoleName: roleName}, 8*time.Hour)
+	sessionID := generateToken()
+	sessionExpires := time.Now().Add(8 * time.Hour)
+	_, _ = h.DB.Exec(r.Context(), `
+    INSERT INTO sessions (user_id, refresh_token, expires_at)
+    VALUES ($1,$2,$3)
+  `, id, auth.HashToken(sessionID), sessionExpires)
+
+	token, err := auth.GenerateToken(h.Secret, auth.Claims{UserID: id, TenantID: tenantID, RoleID: roleID, RoleName: roleName, SessionID: sessionID}, 8*time.Hour)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "token_error", "failed to issue token", requestctx.GetRequestID(r.Context()))
 		return
@@ -79,6 +87,9 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	if user, ok := middleware.GetUser(r.Context()); ok && user.SessionID != "" {
+		_, _ = h.DB.Exec(r.Context(), "DELETE FROM sessions WHERE user_id = $1 AND refresh_token = $2", user.UserID, auth.HashToken(user.SessionID))
+	}
 	api.Success(w, map[string]string{"status": "logged_out"}, requestctx.GetRequestID(r.Context()))
 }
 
@@ -94,7 +105,8 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		token := generateToken()
 		expires := time.Now().Add(2 * time.Hour)
-		_, _ = h.DB.Exec(r.Context(), "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, token, expires)
+		hashed := auth.HashToken(token)
+		_, _ = h.DB.Exec(r.Context(), "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, hashed, expires)
 	}
 
 	api.Success(w, map[string]string{"status": "reset_requested"}, requestctx.GetRequestID(r.Context()))
@@ -112,7 +124,7 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
     SELECT user_id
     FROM password_resets
     WHERE token = $1 AND expires_at > now() AND used_at IS NULL
-  `, payload.Token).Scan(&userID)
+  `, auth.HashToken(payload.Token)).Scan(&userID)
 	if err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_token", "invalid or expired token", requestctx.GetRequestID(r.Context()))
 		return

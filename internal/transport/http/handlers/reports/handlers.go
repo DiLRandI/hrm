@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"hrm/internal/domain/auth"
 	"hrm/internal/domain/leave"
 	"hrm/internal/domain/reports"
 	"hrm/internal/transport/http/api"
@@ -13,18 +14,19 @@ import (
 )
 
 type Handler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Perms middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
+	return &Handler{DB: db, Perms: perms}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/reports", func(r chi.Router) {
-		r.Get("/dashboard/employee", h.handleEmployeeDashboard)
-		r.Get("/dashboard/manager", h.handleManagerDashboard)
-		r.Get("/dashboard/hr", h.handleHRDashboard)
+		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/dashboard/employee", h.handleEmployeeDashboard)
+		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/dashboard/manager", h.handleManagerDashboard)
+		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/dashboard/hr", h.handleHRDashboard)
 	})
 }
 
@@ -32,6 +34,10 @@ func (h *Handler) handleEmployeeDashboard(w http.ResponseWriter, r *http.Request
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleEmployee && user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 		return
 	}
 
@@ -56,6 +62,10 @@ func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request)
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "manager or hr required", middleware.GetRequestID(r.Context()))
+		return
+	}
 
 	var managerEmployeeID string
 	_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
@@ -76,6 +86,10 @@ func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
 

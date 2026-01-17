@@ -25,16 +25,16 @@ func NewHandler(store *core.Store) *Handler {
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/me", h.handleMe)
 	r.Route("/employees", func(r chi.Router) {
-		r.Get("/", h.handleListEmployees)
-		r.Post("/", h.handleCreateEmployee)
+		r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Store)).Get("/", h.handleListEmployees)
+		r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Store)).Post("/", h.handleCreateEmployee)
 		r.Route("/{employeeID}", func(r chi.Router) {
-			r.Get("/", h.handleGetEmployee)
+			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Store)).Get("/", h.handleGetEmployee)
 			r.Put("/", h.handleUpdateEmployee)
 		})
 	})
 	r.Route("/departments", func(r chi.Router) {
-		r.Get("/", h.handleListDepartments)
-		r.Post("/", h.handleCreateDepartment)
+		r.With(middleware.RequirePermission(auth.PermOrgRead, h.Store)).Get("/", h.handleListDepartments)
+		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Store)).Post("/", h.handleCreateDepartment)
 	})
 }
 

@@ -17,11 +17,12 @@ import (
 )
 
 type Handler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Perms middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
+	return &Handler{DB: db, Perms: perms}
 }
 
 type PaySchedule struct {
@@ -57,17 +58,17 @@ type payrollPeriodPayload struct {
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/payroll", func(r chi.Router) {
-		r.Get("/schedules", h.handleListSchedules)
-		r.Post("/schedules", h.handleCreateSchedule)
-		r.Get("/elements", h.handleListElements)
-		r.Post("/elements", h.handleCreateElement)
-		r.Get("/periods", h.handleListPeriods)
-		r.Post("/periods", h.handleCreatePeriod)
-		r.Get("/periods/{periodID}/inputs", h.handleListInputs)
-		r.Post("/periods/{periodID}/inputs", h.handleCreateInput)
-		r.Post("/periods/{periodID}/run", h.handleRunPayroll)
-		r.Post("/periods/{periodID}/finalize", h.handleFinalizePayroll)
-		r.Get("/payslips", h.handleListPayslips)
+		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/schedules", h.handleListSchedules)
+		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/schedules", h.handleCreateSchedule)
+		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/elements", h.handleListElements)
+		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/elements", h.handleCreateElement)
+		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/periods", h.handleListPeriods)
+		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/periods", h.handleCreatePeriod)
+		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/periods/{periodID}/inputs", h.handleListInputs)
+		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/periods/{periodID}/inputs", h.handleCreateInput)
+		r.With(middleware.RequirePermission(auth.PermPayrollRun, h.Perms)).Post("/periods/{periodID}/run", h.handleRunPayroll)
+		r.With(middleware.RequirePermission(auth.PermPayrollFinalize, h.Perms)).Post("/periods/{periodID}/finalize", h.handleFinalizePayroll)
+		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/payslips", h.handleListPayslips)
 	})
 }
 
@@ -463,6 +464,9 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 	}
 
 	employeeID := r.URL.Query().Get("employeeId")
+	if user.RoleName != auth.RoleHR {
+		employeeID = ""
+	}
 	if employeeID == "" {
 		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
 	}

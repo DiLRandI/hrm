@@ -18,21 +18,22 @@ import (
 )
 
 type Handler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Perms middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
+	return &Handler{DB: db, Perms: perms}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/gdpr", func(r chi.Router) {
-		r.Get("/retention-policies", h.handleListRetention)
-		r.Post("/retention-policies", h.handleCreateRetention)
-		r.Get("/dsar", h.handleListDSAR)
-		r.Post("/dsar", h.handleRequestDSAR)
-		r.Post("/anonymize", h.handleRequestAnonymization)
-		r.Get("/access-logs", h.handleAccessLogs)
+		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Get("/retention-policies", h.handleListRetention)
+		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Post("/retention-policies", h.handleCreateRetention)
+		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/dsar", h.handleListDSAR)
+		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Post("/dsar", h.handleRequestDSAR)
+		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Post("/anonymize", h.handleRequestAnonymization)
+		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/access-logs", h.handleAccessLogs)
 	})
 }
 
@@ -111,12 +112,25 @@ func (h *Handler) handleListDSAR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, employee_id, requested_by, status, file_url, requested_at, completed_at
     FROM dsar_exports
     WHERE tenant_id = $1
-    ORDER BY requested_at DESC
-  `, user.TenantID)
+  `
+	args := []any{user.TenantID}
+	if user.RoleName != auth.RoleHR {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		if employeeID == "" {
+			api.Success(w, []map[string]any{}, middleware.GetRequestID(r.Context()))
+			return
+		}
+		query += " AND employee_id = $2"
+		args = append(args, employeeID)
+	}
+	query += " ORDER BY requested_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "dsar_list_failed", "failed to list dsar exports", middleware.GetRequestID(r.Context()))
 		return
@@ -158,6 +172,21 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
+	}
+	if payload.EmployeeID == "" {
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID)
+	}
+	if payload.EmployeeID == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		var selfEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID)
+		if selfEmployeeID == "" || payload.EmployeeID != selfEmployeeID {
+			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 
 	var id string

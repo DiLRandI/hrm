@@ -16,28 +16,29 @@ import (
 )
 
 type Handler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Perms middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
+	return &Handler{DB: db, Perms: perms}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/performance", func(r chi.Router) {
-		r.Get("/goals", h.handleListGoals)
-		r.Post("/goals", h.handleCreateGoal)
-		r.Post("/goals/{goalID}/comments", h.handleAddGoalComment)
-		r.Get("/review-cycles", h.handleListReviewCycles)
-		r.Post("/review-cycles", h.handleCreateReviewCycle)
-		r.Get("/review-tasks", h.handleListReviewTasks)
-		r.Post("/review-tasks/{taskID}/responses", h.handleSubmitReviewResponse)
-		r.Get("/feedback", h.handleListFeedback)
-		r.Post("/feedback", h.handleCreateFeedback)
-		r.Get("/checkins", h.handleListCheckins)
-		r.Post("/checkins", h.handleCreateCheckin)
-		r.Get("/pips", h.handleListPIPs)
-		r.Post("/pips", h.handleCreatePIP)
+		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/goals", h.handleListGoals)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/goals", h.handleCreateGoal)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/goals/{goalID}/comments", h.handleAddGoalComment)
+		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/review-cycles", h.handleListReviewCycles)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/review-cycles", h.handleCreateReviewCycle)
+		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/review-tasks", h.handleListReviewTasks)
+		r.With(middleware.RequirePermission(auth.PermPerformanceReview, h.Perms)).Post("/review-tasks/{taskID}/responses", h.handleSubmitReviewResponse)
+		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/feedback", h.handleListFeedback)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/feedback", h.handleCreateFeedback)
+		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/checkins", h.handleListCheckins)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/checkins", h.handleCreateCheckin)
+		r.With(middleware.RequirePermission(auth.PermPerformanceRead, h.Perms)).Get("/pips", h.handleListPIPs)
+		r.With(middleware.RequirePermission(auth.PermPerformanceWrite, h.Perms)).Post("/pips", h.handleCreatePIP)
 	})
 }
 
@@ -48,12 +49,27 @@ func (h *Handler) handleListGoals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, employee_id, manager_id, title, description, metric, due_date, weight, status, progress
     FROM goals
     WHERE tenant_id = $1
-    ORDER BY created_at DESC
-  `, user.TenantID)
+  `
+	args := []any{user.TenantID}
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND employee_id = $2"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND (manager_id = $2 OR employee_id = $2)"
+		args = append(args, managerEmployeeID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "goal_list_failed", "failed to list goals", middleware.GetRequestID(r.Context()))
 		return
@@ -236,12 +252,27 @@ func (h *Handler) handleListReviewTasks(w http.ResponseWriter, r *http.Request) 
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, cycle_id, employee_id, manager_id, status, self_due, manager_due, hr_due
     FROM review_tasks
     WHERE tenant_id = $1
-    ORDER BY created_at DESC
-  `, user.TenantID)
+  `
+	args := []any{user.TenantID}
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND employee_id = $2"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND (manager_id = $2 OR employee_id = $2)"
+		args = append(args, managerEmployeeID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "review_tasks_failed", "failed to list review tasks", middleware.GetRequestID(r.Context()))
 		return
@@ -307,12 +338,27 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, from_user_id, to_employee_id, type, message, related_goal_id, created_at
     FROM feedback
     WHERE tenant_id = $1
-    ORDER BY created_at DESC
-  `, user.TenantID)
+  `
+	args := []any{user.TenantID}
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND to_employee_id = $2"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND (to_employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $2) OR from_user_id = $3)"
+		args = append(args, managerEmployeeID, user.UserID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "feedback_list_failed", "failed to list feedback", middleware.GetRequestID(r.Context()))
 		return
@@ -378,12 +424,27 @@ func (h *Handler) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, employee_id, manager_id, notes, private, created_at
     FROM checkins
     WHERE tenant_id = $1
-    ORDER BY created_at DESC
-  `, user.TenantID)
+  `
+	args := []any{user.TenantID}
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND employee_id = $2"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND (manager_id = $2 OR employee_id = $2)"
+		args = append(args, managerEmployeeID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "checkin_list_failed", "failed to list checkins", middleware.GetRequestID(r.Context()))
 		return
@@ -448,12 +509,27 @@ func (h *Handler) handleListPIPs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, employee_id, manager_id, hr_owner_id, objectives_json, milestones_json, review_dates_json, status, created_at
     FROM pips
     WHERE tenant_id = $1
-    ORDER BY created_at DESC
-  `, user.TenantID)
+  `
+	args := []any{user.TenantID}
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND employee_id = $2"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND (manager_id = $2 OR employee_id = $2)"
+		args = append(args, managerEmployeeID)
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "pip_list_failed", "failed to list pips", middleware.GetRequestID(r.Context()))
 		return

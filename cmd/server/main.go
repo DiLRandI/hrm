@@ -10,8 +10,8 @@ import (
 
 func main() {
 	cfg := config.Load()
-	if cfg.DatabaseURL == "" {
-		log.Fatal("DATABASE_URL is required")
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config error: %v", err)
 	}
 
 	ctx := context.Background()

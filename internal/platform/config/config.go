@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -18,6 +20,10 @@ type Config struct {
 	SeedSystemAdminPassword string
 	AllowSelfSignup         bool
 	EmailFrom               string
+	RunMigrations           bool
+	RunSeed                 bool
+	MaxBodyBytes            int64
+	RateLimitPerMinute      int
 }
 
 func Load() Config {
@@ -34,6 +40,10 @@ func Load() Config {
 		SeedSystemAdminPassword: getEnv("SEED_SYSTEM_ADMIN_PASSWORD", ""),
 		AllowSelfSignup:         getEnvBool("ALLOW_SELF_SIGNUP", false),
 		EmailFrom:               getEnv("EMAIL_FROM", "no-reply@example.com"),
+		RunMigrations:           getEnvBool("RUN_MIGRATIONS", true),
+		RunSeed:                 getEnvBool("RUN_SEED", true),
+		MaxBodyBytes:            int64(getEnvInt("MAX_BODY_BYTES", 1048576)),
+		RateLimitPerMinute:      getEnvInt("RATE_LIMIT_PER_MINUTE", 60),
 	}
 }
 
@@ -54,4 +64,37 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return parsed
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.DatabaseURL) == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if c.Environment == "production" {
+		if strings.TrimSpace(c.JWTSecret) == "" || c.JWTSecret == "change-me" {
+			return fmt.Errorf("JWT_SECRET must be set to a strong value in production")
+		}
+		if c.RunSeed && (strings.TrimSpace(c.SeedAdminPassword) == "" || c.SeedAdminPassword == "ChangeMe123!") {
+			return fmt.Errorf("SEED_ADMIN_PASSWORD must be changed or RUN_SEED disabled in production")
+		}
+	}
+	if c.MaxBodyBytes < 1024 {
+		return fmt.Errorf("MAX_BODY_BYTES must be at least 1024")
+	}
+	if c.RateLimitPerMinute <= 0 {
+		return fmt.Errorf("RATE_LIMIT_PER_MINUTE must be positive")
+	}
+	return nil
 }

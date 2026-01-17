@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"hrm/internal/domain/auth"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func Auth(secret string) func(http.Handler) http.Handler {
+func Auth(secret string, pool *pgxpool.Pool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -28,11 +30,29 @@ func Auth(secret string) func(http.Handler) http.Handler {
 				return
 			}
 
+			if pool != nil {
+				if claims.SessionID == "" {
+					next.ServeHTTP(w, r)
+					return
+				}
+				var count int
+				err := pool.QueryRow(r.Context(), `
+          SELECT COUNT(1)
+          FROM sessions
+          WHERE user_id = $1 AND refresh_token = $2 AND expires_at > now()
+        `, claims.UserID, auth.HashToken(claims.SessionID)).Scan(&count)
+				if err != nil || count == 0 {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+
 			ctx := context.WithValue(r.Context(), ctxKeyUser, auth.UserContext{
-				UserID:   claims.UserID,
-				TenantID: claims.TenantID,
-				RoleID:   claims.RoleID,
-				RoleName: claims.RoleName,
+				UserID:    claims.UserID,
+				TenantID:  claims.TenantID,
+				RoleID:    claims.RoleID,
+				RoleName:  claims.RoleName,
+				SessionID: claims.SessionID,
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

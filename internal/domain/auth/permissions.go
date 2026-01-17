@@ -56,6 +56,7 @@ var RolePermissions = map[string][]string{
 		PermPerformanceRead,
 		PermPerformanceWrite,
 		PermReportsRead,
+		PermGDPRExport,
 	},
 	RoleManager: {
 		PermEmployeesRead,
@@ -68,6 +69,7 @@ var RolePermissions = map[string][]string{
 		PermPerformanceWrite,
 		PermPerformanceReview,
 		PermReportsRead,
+		PermGDPRExport,
 	},
 	RoleHR: {
 		PermEmployeesRead,

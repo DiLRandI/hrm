@@ -16,29 +16,30 @@ import (
 )
 
 type Handler struct {
-	DB *pgxpool.Pool
+	DB    *pgxpool.Pool
+	Perms middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool) *Handler {
-	return &Handler{DB: db}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
+	return &Handler{DB: db, Perms: perms}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/leave", func(r chi.Router) {
-		r.Get("/types", h.handleListTypes)
-		r.Post("/types", h.handleCreateType)
-		r.Get("/policies", h.handleListPolicies)
-		r.Post("/policies", h.handleCreatePolicy)
-		r.Get("/balances", h.handleListBalances)
-		r.Post("/balances/adjust", h.handleAdjustBalance)
-		r.Get("/requests", h.handleListRequests)
-		r.Post("/requests", h.handleCreateRequest)
-		r.Post("/requests/{requestID}/approve", h.handleApproveRequest)
-		r.Post("/requests/{requestID}/reject", h.handleRejectRequest)
-		r.Post("/requests/{requestID}/cancel", h.handleCancelRequest)
-		r.Get("/calendar", h.handleCalendar)
-		r.Get("/reports/balances", h.handleReportBalances)
-		r.Get("/reports/usage", h.handleReportUsage)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/types", h.handleListTypes)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/types", h.handleCreateType)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/policies", h.handleListPolicies)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/policies", h.handleCreatePolicy)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/balances", h.handleListBalances)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/balances/adjust", h.handleAdjustBalance)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/requests", h.handleListRequests)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests", h.handleCreateRequest)
+		r.With(middleware.RequirePermission(auth.PermLeaveApprove, h.Perms)).Post("/requests/{requestID}/approve", h.handleApproveRequest)
+		r.With(middleware.RequirePermission(auth.PermLeaveApprove, h.Perms)).Post("/requests/{requestID}/reject", h.handleRejectRequest)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests/{requestID}/cancel", h.handleCancelRequest)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/calendar", h.handleCalendar)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/reports/balances", h.handleReportBalances)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/reports/usage", h.handleReportUsage)
 	})
 }
 
@@ -170,8 +171,40 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 	}
 
 	employeeID := r.URL.Query().Get("employeeId")
+	var selfEmployeeID string
+	if user.RoleName != auth.RoleHR || employeeID == "" {
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID)
+	}
+
+	switch user.RoleName {
+	case auth.RoleEmployee:
+		employeeID = selfEmployeeID
+	case auth.RoleManager:
+		if employeeID == "" {
+			employeeID = selfEmployeeID
+		}
+		if employeeID != "" && employeeID != selfEmployeeID {
+			var allowed int
+			_ = h.DB.QueryRow(r.Context(), `
+        SELECT COUNT(1)
+        FROM employees
+        WHERE tenant_id = $1 AND id = $2 AND manager_id = $3
+      `, user.TenantID, employeeID, selfEmployeeID).Scan(&allowed)
+			if allowed == 0 {
+				api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+				return
+			}
+		}
+	case auth.RoleHR:
+		if employeeID == "" {
+			api.Fail(w, http.StatusBadRequest, "invalid_request", "employee id required", middleware.GetRequestID(r.Context()))
+			return
+		}
+	}
+
 	if employeeID == "" {
-		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		api.Fail(w, http.StatusBadRequest, "invalid_request", "employee id required", middleware.GetRequestID(r.Context()))
+		return
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
@@ -481,11 +514,27 @@ func (h *Handler) handleCalendar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	query := `
     SELECT id, employee_id, leave_type_id, start_date, end_date, status
     FROM leave_requests
     WHERE tenant_id = $1 AND status = ANY($2)
-  `, user.TenantID, []string{leave.StatusPending, leave.StatusApproved})
+  `
+	args := []any{user.TenantID, []string{leave.StatusPending, leave.StatusApproved}}
+
+	if user.RoleName == auth.RoleEmployee {
+		var employeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID)
+		query += " AND employee_id = $3"
+		args = append(args, employeeID)
+	}
+	if user.RoleName == auth.RoleManager {
+		var managerEmployeeID string
+		_ = h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID)
+		query += " AND employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $3)"
+		args = append(args, managerEmployeeID)
+	}
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "calendar_failed", "failed to load calendar", middleware.GetRequestID(r.Context()))
 		return
@@ -516,6 +565,10 @@ func (h *Handler) handleReportBalances(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
 
@@ -553,6 +606,10 @@ func (h *Handler) handleReportUsage(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
 

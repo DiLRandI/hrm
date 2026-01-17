@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -9,10 +11,11 @@ import (
 )
 
 type Claims struct {
-	UserID   string `json:"uid"`
-	TenantID string `json:"tid"`
-	RoleID   string `json:"rid"`
-	RoleName string `json:"role"`
+	UserID    string `json:"uid"`
+	TenantID  string `json:"tid"`
+	RoleID    string `json:"rid"`
+	RoleName  string `json:"role"`
+	SessionID string `json:"sid"`
 	jwt.RegisteredClaims
 }
 
@@ -52,4 +55,9 @@ func ParseToken(secret, tokenString string) (*Claims, error) {
 		return nil, errors.New("invalid token")
 	}
 	return claims, nil
+}
+
+func HashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

@@ -36,14 +36,18 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		return nil, err
 	}
 
-	if err := db.Migrate(ctx, pool, "migrations"); err != nil {
-		pool.Close()
-		return nil, err
+	if cfg.RunMigrations {
+		if err := db.Migrate(ctx, pool, "migrations"); err != nil {
+			pool.Close()
+			return nil, err
+		}
 	}
 
-	if err := db.Seed(ctx, pool, cfg); err != nil {
-		pool.Close()
-		return nil, err
+	if cfg.RunSeed {
+		if err := db.Seed(ctx, pool, cfg); err != nil {
+			pool.Close()
+			return nil, err
+		}
 	}
 
 	coreStore := core.NewStore(pool)
@@ -63,7 +67,16 @@ func (a *App) Close() {
 }
 
 func (a *App) Run() error {
-	return http.ListenAndServe(a.Config.Addr, a.Router)
+	srv := &http.Server{
+		Addr:              a.Config.Addr,
+		Handler:           a.Router,
+		ReadTimeout:       10 * time.Second,
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	return srv.ListenAndServe()
 }
 
 func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.Handler {
@@ -71,7 +84,8 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.H
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
-	router.Use(middleware.Auth(cfg.JWTSecret))
+	router.Use(middleware.SecureHeaders(cfg.Environment == "production"))
+	router.Use(middleware.Auth(cfg.JWTSecret, pool))
 
 	router.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -90,28 +104,29 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.H
 	})
 
 	router.Route("/api/v1", func(r chi.Router) {
+		r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
 		authHandler := authhandler.NewHandler(pool, cfg.JWTSecret)
-		r.Post("/auth/login", authHandler.HandleLogin)
+		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/login", authHandler.HandleLogin)
 		r.Post("/auth/logout", authHandler.HandleLogout)
-		r.Post("/auth/request-reset", authHandler.HandleRequestReset)
+		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/request-reset", authHandler.HandleRequestReset)
 		r.Post("/auth/reset", authHandler.HandleResetPassword)
 
 		coreHandler := corehandler.NewHandler(coreStore)
 		coreHandler.RegisterRoutes(r)
 
-		leaveHandler := leavehandler.NewHandler(pool)
+		leaveHandler := leavehandler.NewHandler(pool, coreStore)
 		leaveHandler.RegisterRoutes(r)
 
-		payrollHandler := payrollhandler.NewHandler(pool)
+		payrollHandler := payrollhandler.NewHandler(pool, coreStore)
 		payrollHandler.RegisterRoutes(r)
 
-		performanceHandler := performancehandler.NewHandler(pool)
+		performanceHandler := performancehandler.NewHandler(pool, coreStore)
 		performanceHandler.RegisterRoutes(r)
 
-		gdprHandler := gdprhandler.NewHandler(pool)
+		gdprHandler := gdprhandler.NewHandler(pool, coreStore)
 		gdprHandler.RegisterRoutes(r)
 
-		reportsHandler := reportshandler.NewHandler(pool)
+		reportsHandler := reportshandler.NewHandler(pool, coreStore)
 		reportsHandler.RegisterRoutes(r)
 
 		notificationsHandler := notificationshandler.NewHandler(notifications.New(pool))
