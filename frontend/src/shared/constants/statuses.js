@@ -2,6 +2,7 @@ export const EMPLOYEE_STATUS_ACTIVE = 'active';
 export const EMPLOYEE_STATUS_ANONYMIZED = 'anonymized';
 
 export const LEAVE_STATUS_PENDING = 'pending';
+export const LEAVE_STATUS_PENDING_HR = 'pending_hr';
 export const LEAVE_STATUS_APPROVED = 'approved';
 export const LEAVE_STATUS_REJECTED = 'rejected';
 export const LEAVE_STATUS_CANCELLED = 'cancelled';
@@ -14,6 +15,9 @@ export const GOAL_STATUS_ACTIVE = 'active';
 export const GOAL_STATUS_COMPLETED = 'completed';
 
 export const REVIEW_TASK_ASSIGNED = 'assigned';
+export const REVIEW_TASK_SELF_PENDING = 'self_pending';
+export const REVIEW_TASK_MANAGER_PENDING = 'manager_pending';
+export const REVIEW_TASK_HR_PENDING = 'hr_pending';
 export const REVIEW_TASK_SUBMITTED = 'submitted';
 export const REVIEW_TASK_SELF_COMPLETED = 'self_completed';
 export const REVIEW_TASK_MANAGER_COMPLETED = 'manager_completed';

@@ -12,6 +12,8 @@ React SPA under `frontend/src`. Review focuses on architecture, data flow, UX co
 - Clear module separation (core, leave, payroll, performance, GDPR, reports).
 - Lightweight fetch wrapper with consistent error handling.
 - Role-aware rendering for HR/manager actions in core workflows.
+- Added pagination controls for high-volume views (employees, leave requests, audit, DSAR/access logs).
+- Expanded test coverage for key workflow pages plus Playwright smoke E2E.
 
 ## Findings (Key Gaps)
 ### Data Fetching & State
@@ -22,15 +24,15 @@ React SPA under `frontend/src`. Review focuses on architecture, data flow, UX co
 ### UX & Validation
 - Form validation is minimal and mostly server-driven; JSON inputs (templates, PIPs) rely on user correctness.
 - Error states are inconsistent and not centrally surfaced (no toast/alert system).
-- Large tables lack pagination/search/filtering controls, which will degrade UX with real data volumes.
+- Large tables now include pagination for high-volume modules; other lists still lack filtering/search.
 
 ### Access Control & Routing
 - Role gating is done within pages but there are no route-level guards for HR/manager-only screens.
 - Employee IDs are entered manually in several forms; a directory picker would reduce errors.
 
 ### Testing
-- Only basic unit tests exist (auth + dashboard). New workflows (leave, payroll, performance, GDPR) are untested.
-- No Playwright E2E coverage.
+- Unit tests cover auth, dashboard, leave, payroll, and GDPR flows; performance and notifications still have light coverage.
+- Playwright smoke E2E exists and can be run against a live environment.
 
 ## Recommendations (Prioritized)
 1. Introduce a data-fetching layer (TanStack Query) for caching, loading states, and error handling.

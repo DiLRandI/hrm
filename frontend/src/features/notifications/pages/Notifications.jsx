@@ -1,14 +1,29 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
+import { useAuth } from '../../auth/auth.jsx';
+import { ROLE_HR } from '../../../shared/constants/roles.js';
 
 export default function Notifications() {
+  const { user } = useAuth();
+  const isHR = (user?.role || user?.RoleName) === ROLE_HR;
   const [items, setItems] = useState([]);
+  const [settings, setSettings] = useState(null);
+  const [settingsForm, setSettingsForm] = useState({ emailEnabled: false, emailFrom: '' });
+  const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
   const load = async () => {
     try {
       const data = await api.get('/notifications');
       setItems(Array.isArray(data) ? data : []);
+      if (isHR) {
+        const settingsData = await api.get('/notifications/settings');
+        setSettings(settingsData);
+        setSettingsForm({
+          emailEnabled: Boolean(settingsData?.emailEnabled),
+          emailFrom: settingsData?.emailFrom || '',
+        });
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -16,11 +31,23 @@ export default function Notifications() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [isHR]);
 
   const markRead = async (id) => {
     try {
       await api.post(`/notifications/${id}/read`, {});
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const saveSettings = async (e) => {
+    e.preventDefault();
+    setMessage('');
+    try {
+      await api.put('/notifications/settings', settingsForm);
+      setMessage('Notification settings saved.');
       await load();
     } catch (err) {
       setError(err.message);
@@ -37,6 +64,32 @@ export default function Notifications() {
       </header>
 
       {error && <div className="error">{error}</div>}
+      {message && <div className="success">{message}</div>}
+
+      {isHR && (
+        <div className="card">
+          <h3>Email notifications</h3>
+          <form className="stack" onSubmit={saveSettings}>
+            <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={settingsForm.emailEnabled}
+                onChange={(e) => setSettingsForm({ ...settingsForm, emailEnabled: e.target.checked })}
+              />
+              Enable tenant email notifications
+            </label>
+            <input
+              placeholder="From address"
+              value={settingsForm.emailFrom}
+              onChange={(e) => setSettingsForm({ ...settingsForm, emailFrom: e.target.value })}
+            />
+            <button type="submit">Save settings</button>
+          </form>
+          {settings && (
+            <small className="hint">Current status: {settings.emailEnabled ? 'Enabled' : 'Disabled'}</small>
+          )}
+        </div>
+      )}
 
       <div className="list">
         {items.map((item) => (

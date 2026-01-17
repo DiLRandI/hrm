@@ -12,8 +12,8 @@ type Mailer interface {
 }
 
 type Service struct {
-	DB *pgxpool.Pool
-	Mailer Mailer
+	DB          *pgxpool.Pool
+	Mailer      Mailer
 	DefaultFrom string
 }
 
@@ -56,13 +56,14 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, ntype, title, bo
 	return nil
 }
 
-func (s *Service) List(ctx context.Context, tenantID, userID string) ([]map[string]any, error) {
+func (s *Service) List(ctx context.Context, tenantID, userID string, limit, offset int) ([]map[string]any, error) {
 	rows, err := s.DB.Query(ctx, `
     SELECT id, type, title, body, read_at, created_at
     FROM notifications
     WHERE tenant_id = $1 AND user_id = $2
     ORDER BY created_at DESC
-  `, tenantID, userID)
+    LIMIT $3 OFFSET $4
+  `, tenantID, userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}

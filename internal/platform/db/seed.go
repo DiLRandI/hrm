@@ -40,6 +40,10 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) error {
 		}
 	}
 
+	if err := ensureTenantSettings(ctx, pool, tenantID, cfg.EmailFrom); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -140,4 +144,13 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, tenantID, roleID, 
 		return err
 	}
 	return nil
+}
+
+func ensureTenantSettings(ctx context.Context, pool *pgxpool.Pool, tenantID, emailFrom string) error {
+	_, err := pool.Exec(ctx, `
+    INSERT INTO tenant_settings (tenant_id, email_notifications_enabled, email_from)
+    VALUES ($1, false, $2)
+    ON CONFLICT (tenant_id) DO NOTHING
+  `, tenantID, emailFrom)
+	return err
 }

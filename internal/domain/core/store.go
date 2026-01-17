@@ -201,7 +201,10 @@ func (s *Store) ListEmployees(ctx context.Context, tenantID string) ([]Employee,
 }
 
 func (s *Store) CreateEmployee(ctx context.Context, tenantID string, emp Employee) (string, error) {
-	nationalEnc, bankEnc, salaryEnc := encryptEmployeeSensitive(s.Crypto, emp)
+	nationalEnc, bankEnc, salaryEnc, encErr := encryptEmployeeSensitive(s.Crypto, emp)
+	if encErr != nil {
+		return "", encErr
+	}
 	var nationalPlain, bankPlain any = emp.NationalID, emp.BankAccount
 	var salaryPlain any = emp.Salary
 	if s.Crypto != nil && s.Crypto.Configured() {
@@ -229,7 +232,10 @@ func (s *Store) CreateEmployee(ctx context.Context, tenantID string, emp Employe
 }
 
 func (s *Store) UpdateEmployee(ctx context.Context, tenantID, employeeID string, emp Employee) error {
-	nationalEnc, bankEnc, salaryEnc := encryptEmployeeSensitive(s.Crypto, emp)
+	nationalEnc, bankEnc, salaryEnc, encErr := encryptEmployeeSensitive(s.Crypto, emp)
+	if encErr != nil {
+		return encErr
+	}
 	var nationalPlain, bankPlain any = emp.NationalID, emp.BankAccount
 	var salaryPlain any = emp.Salary
 	if s.Crypto != nil && s.Crypto.Configured() {
@@ -284,17 +290,35 @@ func nullIfEmpty(value string) any {
 	return value
 }
 
-func encryptEmployeeSensitive(crypto *cryptoutil.Service, emp Employee) ([]byte, []byte, []byte) {
+func encryptEmployeeSensitive(crypto *cryptoutil.Service, emp Employee) ([]byte, []byte, []byte, error) {
 	if crypto == nil || !crypto.Configured() {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	nationalEnc, _ := crypto.EncryptString(emp.NationalID)
-	bankEnc, _ := crypto.EncryptString(emp.BankAccount)
+	var nationalEnc []byte
+	if emp.NationalID != "" {
+		enc, err := crypto.EncryptString(emp.NationalID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		nationalEnc = enc
+	}
+	var bankEnc []byte
+	if emp.BankAccount != "" {
+		enc, err := crypto.EncryptString(emp.BankAccount)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		bankEnc = enc
+	}
 	var salaryEnc []byte
 	if emp.Salary != nil {
-		salaryEnc, _ = crypto.EncryptString(strconv.FormatFloat(*emp.Salary, 'f', 2, 64))
+		enc, err := crypto.EncryptString(strconv.FormatFloat(*emp.Salary, 'f', 2, 64))
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		salaryEnc = enc
 	}
-	return nationalEnc, bankEnc, salaryEnc
+	return nationalEnc, bankEnc, salaryEnc, nil
 }
 
 func decryptStringFallback(crypto *cryptoutil.Service, encrypted []byte, plain string) string {

@@ -10,7 +10,8 @@ import Performance from '../features/performance/pages/Performance.jsx';
 import GDPR from '../features/gdpr/pages/GDPR.jsx';
 import Reports from '../features/reports/pages/Reports.jsx';
 import Notifications from '../features/notifications/pages/Notifications.jsx';
-import { ROLE_EMPLOYEE } from '../shared/constants/roles.js';
+import Audit from '../features/audit/pages/Audit.jsx';
+import { ROLE_EMPLOYEE, ROLE_HR } from '../shared/constants/roles.js';
 
 function AppShell() {
   const { user, logout } = useAuth();
@@ -37,6 +38,7 @@ function AppShell() {
           <NavLink to="/gdpr">GDPR</NavLink>
           <NavLink to="/reports">Reports</NavLink>
           <NavLink to="/notifications">Notifications</NavLink>
+          {role === ROLE_HR && <NavLink to="/audit">Audit</NavLink>}
         </nav>
         <button className="ghost" onClick={logout}>Log out</button>
       </aside>
@@ -50,6 +52,7 @@ function AppShell() {
           <Route path="/gdpr" element={<GDPR />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/notifications" element={<Notifications />} />
+          <Route path="/audit" element={<Audit />} />
         </Routes>
       </main>
     </div>

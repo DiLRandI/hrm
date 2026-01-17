@@ -694,7 +694,7 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 			return
 		}
-		if taskStatus != performance.ReviewTaskStatusSelfPending {
+		if taskStatus != performance.ReviewTaskStatusSelfPending && taskStatus != performance.ReviewTaskStatusAssigned {
 			api.Fail(w, http.StatusBadRequest, "invalid_state", "self review not available", middleware.GetRequestID(r.Context()))
 			return
 		}

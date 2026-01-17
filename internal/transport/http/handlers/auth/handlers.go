@@ -50,8 +50,6 @@ type mfaCodeRequest struct {
 	Code string `json:"code"`
 }
 
-func (h *Handler) RegisterRoutes(r *http.ServeMux) {}
-
 func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var payload loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -238,6 +236,10 @@ func (h *Handler) HandleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", requestctx.GetRequestID(r.Context()))
 		return
 	}
+	if h.Crypto == nil || !h.Crypto.Configured() {
+		api.Fail(w, http.StatusBadRequest, "mfa_unavailable", "mfa requires encryption key", requestctx.GetRequestID(r.Context()))
+		return
+	}
 
 	var payload mfaCodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -271,6 +273,10 @@ func (h *Handler) HandleMFADisable(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", requestctx.GetRequestID(r.Context()))
+		return
+	}
+	if h.Crypto == nil || !h.Crypto.Configured() {
+		api.Fail(w, http.StatusBadRequest, "mfa_unavailable", "mfa requires encryption key", requestctx.GetRequestID(r.Context()))
 		return
 	}
 	var payload mfaCodeRequest

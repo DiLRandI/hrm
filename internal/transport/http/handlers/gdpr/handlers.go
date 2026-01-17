@@ -2,6 +2,8 @@ package gdprhandler
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -28,8 +31,8 @@ import (
 )
 
 type Handler struct {
-	DB    *pgxpool.Pool
-	Perms middleware.PermissionStore
+	DB     *pgxpool.Pool
+	Perms  middleware.PermissionStore
 	Crypto *cryptoutil.Service
 	Jobs   *jobs.Service
 	Store  *core.Store
@@ -76,12 +79,14 @@ type retentionRun struct {
 }
 
 type anonymizationJob struct {
-	ID          string    `json:"id"`
-	EmployeeID  string    `json:"employeeId"`
-	Status      string    `json:"status"`
-	Reason      string    `json:"reason"`
-	RequestedAt time.Time `json:"requestedAt"`
-	CompletedAt any       `json:"completedAt"`
+	ID            string    `json:"id"`
+	EmployeeID    string    `json:"employeeId"`
+	Status        string    `json:"status"`
+	Reason        string    `json:"reason"`
+	RequestedAt   time.Time `json:"requestedAt"`
+	CompletedAt   any       `json:"completedAt"`
+	FilePath      string    `json:"filePath,omitempty"`
+	DownloadToken string    `json:"downloadToken,omitempty"`
 }
 
 type consentRecord struct {
@@ -260,11 +265,15 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if runID != "" {
-			detailsJSON, _ := json.Marshal(map[string]any{
+			detailsJSON, err := json.Marshal(map[string]any{
 				"dataCategory": category,
 				"cutoffDate":   cutoff,
 				"deleted":      deleted,
 			})
+			if err != nil {
+				slog.Warn("retention job details marshal failed", "err", err)
+				detailsJSON = []byte("{}")
+			}
 			if _, updErr := h.DB.Exec(r.Context(), `
         UPDATE job_runs SET status = $1, details_json = $2, completed_at = now()
         WHERE id = $3
@@ -273,12 +282,12 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		var runID string
+		var retentionRunID string
 		if err := h.DB.QueryRow(r.Context(), `
       INSERT INTO retention_runs (tenant_id, data_category, cutoff_date, status, deleted_count)
       VALUES ($1,$2,$3,$4,$5)
       RETURNING id
-    `, user.TenantID, category, cutoff, status, deleted).Scan(&runID); err != nil {
+    `, user.TenantID, category, cutoff, status, deleted).Scan(&retentionRunID); err != nil {
 			slog.Warn("retention run insert failed", "err", err)
 		}
 
@@ -405,7 +414,7 @@ func (h *Handler) handleListDSAR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-    SELECT id, employee_id, requested_by, status, file_url, requested_at, completed_at
+    SELECT id, employee_id, requested_by, status, COALESCE(file_path,''), COALESCE(download_token,''), requested_at, completed_at
     FROM dsar_exports
     WHERE tenant_id = $1
   `
@@ -424,6 +433,20 @@ func (h *Handler) handleListDSAR(w http.ResponseWriter, r *http.Request) {
 	}
 	query += " ORDER BY requested_at DESC"
 
+	page := shared.ParsePagination(r, 100, 500)
+	countQuery := "SELECT COUNT(1) FROM dsar_exports WHERE tenant_id = $1"
+	if len(args) == 2 {
+		countQuery += " AND employee_id = $2"
+	}
+	var total int
+	if err := h.DB.QueryRow(r.Context(), countQuery, args...).Scan(&total); err != nil {
+		slog.Warn("dsar count failed", "err", err)
+	}
+	limitPos := len(args) + 1
+	offsetPos := len(args) + 2
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", limitPos, offsetPos)
+	args = append(args, page.Limit, page.Offset)
+
 	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "dsar_list_failed", "failed to list dsar exports", middleware.GetRequestID(r.Context()))
@@ -433,23 +456,25 @@ func (h *Handler) handleListDSAR(w http.ResponseWriter, r *http.Request) {
 
 	var exports []map[string]any
 	for rows.Next() {
-		var id, employeeID, requestedBy, status, fileURL string
+		var id, employeeID, requestedBy, status, filePath, token string
 		var requestedAt time.Time
 		var completedAt any
-		if err := rows.Scan(&id, &employeeID, &requestedBy, &status, &fileURL, &requestedAt, &completedAt); err != nil {
+		if err := rows.Scan(&id, &employeeID, &requestedBy, &status, &filePath, &token, &requestedAt, &completedAt); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "dsar_list_failed", "failed to list dsar exports", middleware.GetRequestID(r.Context()))
 			return
 		}
 		exports = append(exports, map[string]any{
-			"id":          id,
-			"employeeId":  employeeID,
-			"requestedBy": requestedBy,
-			"status":      status,
-			"fileUrl":     fileURL,
-			"requestedAt": requestedAt,
-			"completedAt": completedAt,
+			"id":            id,
+			"employeeId":    employeeID,
+			"requestedBy":   requestedBy,
+			"status":        status,
+			"filePath":      filePath,
+			"downloadToken": token,
+			"requestedAt":   requestedAt,
+			"completedAt":   completedAt,
 		})
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, exports, middleware.GetRequestID(r.Context()))
 }
 
@@ -502,15 +527,23 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := gdpr.DSARStatusProcessing
-	fileURL, err := h.generateDSAR(r.Context(), user.TenantID, payload.EmployeeID, id)
+	filePath, encrypted, token, err := h.generateDSAR(r.Context(), user.TenantID, payload.EmployeeID, id)
 	if err == nil {
 		status = gdpr.DSARStatusCompleted
+		expiresAt := time.Now().Add(24 * time.Hour)
 		if _, err := h.DB.Exec(r.Context(), `
-      UPDATE dsar_exports SET status = $1, file_url = $2, completed_at = now() WHERE id = $3
-    `, gdpr.DSARStatusCompleted, fileURL, id); err != nil {
+      UPDATE dsar_exports
+      SET status = $1,
+          file_path = $2,
+          file_encrypted = $3,
+          download_token = $4,
+          download_expires_at = $5,
+          completed_at = now()
+      WHERE id = $6
+    `, gdpr.DSARStatusCompleted, filePath, encrypted, token, expiresAt, id); err != nil {
 			slog.Warn("dsar complete update failed", "err", err)
 		}
-		if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.dsar.complete", "dsar_export", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"fileUrl": fileURL}); err != nil {
+		if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.dsar.complete", "dsar_export", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"filePath": filePath}); err != nil {
 			slog.Warn("audit gdpr.dsar.complete failed", "err", err)
 		}
 	} else {
@@ -533,18 +566,30 @@ func (h *Handler) handleDownloadDSAR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exportID := chi.URLParam(r, "exportID")
-	var employeeID, fileURL string
+	var employeeID, filePath, token string
+	var encrypted bool
+	var tokenExpiry any
 	err := h.DB.QueryRow(r.Context(), `
-    SELECT employee_id, COALESCE(file_url, '')
+    SELECT employee_id, COALESCE(file_path, ''), COALESCE(download_token,''), file_encrypted, download_expires_at
     FROM dsar_exports
     WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, exportID).Scan(&employeeID, &fileURL)
+  `, user.TenantID, exportID).Scan(&employeeID, &filePath, &token, &encrypted, &tokenExpiry)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "dsar export not found", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	if user.RoleName != auth.RoleHR {
+	requestToken := r.URL.Query().Get("token")
+	if requestToken != "" {
+		if token == "" || token != requestToken {
+			api.Fail(w, http.StatusForbidden, "forbidden", "invalid download token", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if expiryTime, ok := tokenExpiry.(time.Time); ok && time.Now().After(expiryTime) {
+			api.Fail(w, http.StatusForbidden, "forbidden", "download token expired", middleware.GetRequestID(r.Context()))
+			return
+		}
+	} else if user.RoleName != auth.RoleHR {
 		var selfEmployeeID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
 			slog.Warn("dsar download self employee lookup failed", "err", err)
@@ -555,138 +600,158 @@ func (h *Handler) handleDownloadDSAR(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if fileURL == "" {
+	if filePath == "" {
 		api.Fail(w, http.StatusNotFound, "not_found", "dsar file not available", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	if _, err := os.Stat(fileURL); err != nil {
+	if _, err := os.Stat(filePath); err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "dsar file not found", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=dsar-%s.json", exportID))
-	http.ServeFile(w, r, fileURL)
+	if encrypted {
+		if h.Crypto == nil || !h.Crypto.Configured() {
+			api.Fail(w, http.StatusInternalServerError, "dsar_failed", "decryption unavailable", middleware.GetRequestID(r.Context()))
+			return
+		}
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "dsar_failed", "failed to read dsar file", middleware.GetRequestID(r.Context()))
+			return
+		}
+		plain, err := h.Crypto.Decrypt(data)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "dsar_failed", "failed to decrypt dsar file", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if _, err := w.Write(plain); err != nil {
+			slog.Warn("dsar download write failed", "err", err)
+		}
+	} else {
+		http.ServeFile(w, r, filePath)
+	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.dsar.download", "dsar_export", exportID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
 		slog.Warn("audit gdpr.dsar.download failed", "err", err)
 	}
 }
 
-func (h *Handler) generateDSAR(ctx context.Context, tenantID, employeeID, exportID string) (string, error) {
-	var employeeJSON []byte
-	if err := h.DB.QueryRow(ctx, `
-    SELECT row_to_json(e)
-    FROM employees e
-    WHERE tenant_id = $1 AND id = $2
-  `, tenantID, employeeID).Scan(&employeeJSON); err != nil {
-		return "", err
+func (h *Handler) generateDSAR(ctx context.Context, tenantID, employeeID, exportID string) (string, bool, string, error) {
+	emp, err := h.Store.GetEmployee(ctx, tenantID, employeeID)
+	if err != nil {
+		return "", false, "", err
+	}
+	employeeJSON, err := json.Marshal(emp)
+	if err != nil {
+		return "", false, "", err
 	}
 	var employee map[string]any
 	if err := json.Unmarshal(employeeJSON, &employee); err != nil {
-		return "", err
+		return "", false, "", err
 	}
 
-	var leaveRequests []map[string]any
-	rows, err := h.DB.Query(ctx, `
-    SELECT row_to_json(lr)
-    FROM leave_requests lr
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID)
-	if err != nil {
-		return "", err
-	}
-	for rows.Next() {
-		var rowJSON []byte
-		if err := rows.Scan(&rowJSON); err != nil {
-			rows.Close()
-			return "", err
+	queryRows := func(query string, args ...any) ([]map[string]any, error) {
+		rows, err := h.DB.Query(ctx, query, args...)
+		if err != nil {
+			return nil, err
 		}
-		var row map[string]any
-		if err := json.Unmarshal(rowJSON, &row); err != nil {
-			rows.Close()
-			return "", err
+		defer rows.Close()
+		var out []map[string]any
+		for rows.Next() {
+			var rowJSON []byte
+			if err := rows.Scan(&rowJSON); err != nil {
+				return nil, err
+			}
+			var row map[string]any
+			if err := json.Unmarshal(rowJSON, &row); err != nil {
+				return nil, err
+			}
+			out = append(out, row)
 		}
-		leaveRequests = append(leaveRequests, row)
+		return out, rows.Err()
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return "", err
-	}
-	rows.Close()
 
-	var payrollResults []map[string]any
-	rows, err = h.DB.Query(ctx, `
-    SELECT row_to_json(pr)
-    FROM payroll_results pr
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID)
-	if err != nil {
-		return "", err
+	datasets := map[string]any{}
+	if rows, err := queryRows(`SELECT row_to_json(lr) FROM leave_requests lr WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["leaveRequests"] = rows
 	}
-	for rows.Next() {
-		var rowJSON []byte
-		if err := rows.Scan(&rowJSON); err != nil {
-			rows.Close()
-			return "", err
+	if rows, err := queryRows(`SELECT row_to_json(pr) FROM payroll_results pr WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["payrollResults"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(ps) FROM payslips ps WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["payslips"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(g) FROM goals g WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["goals"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(gc) FROM goal_comments gc JOIN goals g ON gc.goal_id = g.id WHERE g.tenant_id = $1 AND g.employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["goalComments"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(f) FROM feedback f WHERE tenant_id = $1 AND (to_employee_id = $2 OR from_user_id = $3)`, tenantID, employeeID, emp.UserID); err == nil {
+		datasets["feedback"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(c) FROM checkins c WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["checkins"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(p) FROM pips p WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["pips"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(rt) FROM review_tasks rt WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["reviewTasks"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(rr) FROM review_responses rr JOIN review_tasks rt ON rr.task_id = rt.id WHERE rr.tenant_id = $1 AND rt.employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["reviewResponses"] = rows
+	}
+	if rows, err := queryRows(`SELECT row_to_json(cr) FROM consent_records cr WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["consentRecords"] = rows
+	}
+	if emp.UserID != "" {
+		if rows, err := queryRows(`SELECT row_to_json(n) FROM notifications n WHERE tenant_id = $1 AND user_id = $2`, tenantID, emp.UserID); err == nil {
+			datasets["notifications"] = rows
 		}
-		var row map[string]any
-		if err := json.Unmarshal(rowJSON, &row); err != nil {
-			rows.Close()
-			return "", err
-		}
-		payrollResults = append(payrollResults, row)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return "", err
+	if rows, err := queryRows(`SELECT row_to_json(al) FROM access_logs al WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID); err == nil {
+		datasets["accessLogs"] = rows
 	}
-	rows.Close()
+	if rows, err := queryRows(`SELECT row_to_json(mr) FROM manager_relations mr WHERE mr.employee_id = $1`, employeeID); err == nil {
+		datasets["managerHistory"] = rows
+	}
 
-	var goals []map[string]any
-	rows, err = h.DB.Query(ctx, `
-    SELECT row_to_json(g)
-    FROM goals g
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID)
-	if err != nil {
-		return "", err
-	}
-	for rows.Next() {
-		var rowJSON []byte
-		if err := rows.Scan(&rowJSON); err != nil {
-			rows.Close()
-			return "", err
-		}
-		var row map[string]any
-		if err := json.Unmarshal(rowJSON, &row); err != nil {
-			rows.Close()
-			return "", err
-		}
-		goals = append(goals, row)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return "", err
-	}
-	rows.Close()
-
-	payload := gdpr.BuildDSARPayload(employee, leaveRequests, payrollResults, goals)
+	payload := gdpr.BuildDSARPayload(employee, datasets)
 	jsonBytes, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
-		return "", err
+		return "", false, "", err
 	}
 
 	if err := os.MkdirAll("storage/dsar", 0o755); err != nil {
-		return "", err
+		return "", false, "", err
 	}
 
+	encrypted := false
 	filePath := filepath.Join("storage/dsar", exportID+".json")
-	if err := os.WriteFile(filePath, jsonBytes, 0o600); err != nil {
-		return "", err
+	if h.Crypto != nil && h.Crypto.Configured() {
+		enc, err := h.Crypto.Encrypt(jsonBytes)
+		if err != nil {
+			return "", false, "", err
+		}
+		encrypted = true
+		filePath = filePath + ".enc"
+		if err := os.WriteFile(filePath, enc, 0o600); err != nil {
+			return "", false, "", err
+		}
+	} else {
+		if err := os.WriteFile(filePath, jsonBytes, 0o600); err != nil {
+			return "", false, "", err
+		}
 	}
 
-	return filePath, nil
+	token, err := generateDownloadToken()
+	if err != nil {
+		return "", encrypted, "", err
+	}
+	return filePath, encrypted, token, nil
 }
 
 func (h *Handler) handleListAnonymizationJobs(w http.ResponseWriter, r *http.Request) {
@@ -701,7 +766,7 @@ func (h *Handler) handleListAnonymizationJobs(w http.ResponseWriter, r *http.Req
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-    SELECT id, employee_id, status, reason, requested_at, completed_at
+    SELECT id, employee_id, status, reason, requested_at, completed_at, COALESCE(file_path,''), COALESCE(download_token,'')
     FROM anonymization_jobs
     WHERE tenant_id = $1
     ORDER BY requested_at DESC
@@ -715,7 +780,7 @@ func (h *Handler) handleListAnonymizationJobs(w http.ResponseWriter, r *http.Req
 	var jobs []anonymizationJob
 	for rows.Next() {
 		var job anonymizationJob
-		if err := rows.Scan(&job.ID, &job.EmployeeID, &job.Status, &job.Reason, &job.RequestedAt, &job.CompletedAt); err != nil {
+		if err := rows.Scan(&job.ID, &job.EmployeeID, &job.Status, &job.Reason, &job.RequestedAt, &job.CompletedAt, &job.FilePath, &job.DownloadToken); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "anonymize_list_failed", "failed to list anonymization jobs", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -831,12 +896,16 @@ func (h *Handler) handleExecuteAnonymization(w http.ResponseWriter, r *http.Requ
         phone = NULL,
         address = NULL,
         national_id = NULL,
+        national_id_enc = NULL,
         bank_account = NULL,
+        bank_account_enc = NULL,
         salary = NULL,
+        salary_enc = NULL,
         currency = COALESCE(currency, 'USD'),
         employment_type = NULL,
         department_id = NULL,
         manager_id = NULL,
+        pay_group_id = NULL,
         status = $2,
         updated_at = now()
     WHERE tenant_id = $3 AND id = $4
@@ -852,6 +921,8 @@ func (h *Handler) handleExecuteAnonymization(w http.ResponseWriter, r *http.Requ
       UPDATE users
       SET email = $1,
           status = $2,
+          mfa_secret_enc = NULL,
+          mfa_enabled = false,
           updated_at = now()
       WHERE tenant_id = $3 AND id = $4
     `, anonUserEmail, core.UserStatusDisabled, user.TenantID, userID); err != nil {
@@ -937,10 +1008,124 @@ func (h *Handler) handleExecuteAnonymization(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	report := map[string]any{
+		"employeeId":  employeeID,
+		"status":      gdpr.AnonymizationCompleted,
+		"completedAt": time.Now(),
+	}
+	if err := os.MkdirAll("storage/anonymization", 0o755); err == nil {
+		reportPath := filepath.Join("storage/anonymization", jobID+".json")
+		reportBytes, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			slog.Warn("anonymization report marshal failed", "err", err)
+			reportBytes = []byte("{}")
+		}
+		encrypted := false
+		if h.Crypto != nil && h.Crypto.Configured() {
+			if enc, err := h.Crypto.Encrypt(reportBytes); err == nil {
+				reportPath = reportPath + ".enc"
+				encrypted = true
+				if err := os.WriteFile(reportPath, enc, 0o600); err == nil {
+					token, tokenErr := generateDownloadToken()
+					if tokenErr == nil {
+						expiresAt := time.Now().Add(24 * time.Hour)
+						if _, err := h.DB.Exec(ctx, `
+            UPDATE anonymization_jobs
+            SET file_path = $1, download_token = $2, download_expires_at = $3
+            WHERE tenant_id = $4 AND id = $5
+          `, reportPath, token, expiresAt, user.TenantID, jobID); err != nil {
+							slog.Warn("anonymization report update failed", "err", err)
+						}
+					}
+				}
+			}
+		}
+		if !encrypted {
+			if err := os.WriteFile(reportPath, reportBytes, 0o600); err == nil {
+				token, tokenErr := generateDownloadToken()
+				if tokenErr == nil {
+					expiresAt := time.Now().Add(24 * time.Hour)
+					if _, err := h.DB.Exec(ctx, `
+          UPDATE anonymization_jobs
+          SET file_path = $1, download_token = $2, download_expires_at = $3
+          WHERE tenant_id = $4 AND id = $5
+        `, reportPath, token, expiresAt, user.TenantID, jobID); err != nil {
+						slog.Warn("anonymization report update failed", "err", err)
+					}
+				}
+			}
+		}
+	}
+
 	if err := audit.New(h.DB).Record(ctx, user.TenantID, user.UserID, "gdpr.anonymize.execute", "anonymization_job", jobID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"employeeId": employeeID}); err != nil {
 		slog.Warn("audit gdpr.anonymize.execute failed", "err", err)
 	}
 	api.Success(w, map[string]string{"status": gdpr.AnonymizationCompleted}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleDownloadAnonymizationReport(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	jobID := chi.URLParam(r, "jobID")
+	var filePath, token string
+	var tokenExpiry any
+	if err := h.DB.QueryRow(r.Context(), `
+    SELECT COALESCE(file_path,''), COALESCE(download_token,''), download_expires_at
+    FROM anonymization_jobs
+    WHERE tenant_id = $1 AND id = $2
+  `, user.TenantID, jobID).Scan(&filePath, &token, &tokenExpiry); err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "anonymization report not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if filePath == "" {
+		api.Fail(w, http.StatusNotFound, "not_found", "anonymization report not available", middleware.GetRequestID(r.Context()))
+		return
+	}
+	requestToken := r.URL.Query().Get("token")
+	if requestToken != "" {
+		if token == "" || token != requestToken {
+			api.Fail(w, http.StatusForbidden, "forbidden", "invalid download token", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if expiryTime, ok := tokenExpiry.(time.Time); ok && time.Now().After(expiryTime) {
+			api.Fail(w, http.StatusForbidden, "forbidden", "download token expired", middleware.GetRequestID(r.Context()))
+			return
+		}
+	}
+
+	if _, err := os.Stat(filePath); err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "anonymization report not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=anonymization-%s.json", jobID))
+	if h.Crypto != nil && h.Crypto.Configured() && strings.HasSuffix(filePath, ".enc") {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "anonymize_failed", "failed to read report", middleware.GetRequestID(r.Context()))
+			return
+		}
+		plain, err := h.Crypto.Decrypt(data)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "anonymize_failed", "failed to decrypt report", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if _, err := w.Write(plain); err != nil {
+			slog.Warn("anonymization report write failed", "err", err)
+		}
+		return
+	}
+
+	http.ServeFile(w, r, filePath)
 }
 
 func (h *Handler) failAnonymization(ctx context.Context, tenantID, jobID string) {
@@ -964,12 +1149,18 @@ func (h *Handler) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	page := shared.ParsePagination(r, 100, 500)
+	var total int
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM access_logs WHERE tenant_id = $1", user.TenantID).Scan(&total); err != nil {
+		slog.Warn("access log count failed", "err", err)
+	}
 	rows, err := h.DB.Query(r.Context(), `
     SELECT id, actor_user_id, employee_id, fields, request_id, created_at
     FROM access_logs
     WHERE tenant_id = $1
     ORDER BY created_at DESC
-  `, user.TenantID)
+    LIMIT $2 OFFSET $3
+  `, user.TenantID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "access_log_failed", "failed to list access logs", middleware.GetRequestID(r.Context()))
 		return
@@ -995,176 +1186,14 @@ func (h *Handler) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, logs, middleware.GetRequestID(r.Context()))
 }
 
-func (h *Handler) applyRetention(ctx context.Context, tenantID, category string, cutoff time.Time) (int64, error) {
-	switch category {
-	case gdpr.DataCategoryAudit:
-		tag, err := h.DB.Exec(ctx, `
-      DELETE FROM audit_events
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		return tag.RowsAffected(), err
-	case gdpr.DataCategoryLeave:
-		var total int64
-		tag, err := h.DB.Exec(ctx, `
-      DELETE FROM leave_approvals
-      WHERE tenant_id = $1 AND decided_at IS NOT NULL AND decided_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM leave_requests
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		return total, err
-	case gdpr.DataCategoryPayroll:
-		rows, err := h.DB.Query(ctx, `
-      SELECT id
-      FROM payroll_periods
-      WHERE tenant_id = $1 AND end_date < $2
-    `, tenantID, cutoff)
-		if err != nil {
-			return 0, err
-		}
-		var periodIDs []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return 0, err
-			}
-			periodIDs = append(periodIDs, id)
-		}
-		rows.Close()
-		if len(periodIDs) == 0 {
-			return 0, nil
-		}
-		var total int64
-		queries := []string{
-			"DELETE FROM payroll_inputs WHERE tenant_id = $1 AND period_id = ANY($2::uuid[])",
-			"DELETE FROM payroll_adjustments WHERE tenant_id = $1 AND period_id = ANY($2::uuid[])",
-			"DELETE FROM payroll_results WHERE tenant_id = $1 AND period_id = ANY($2::uuid[])",
-			"DELETE FROM payslips WHERE tenant_id = $1 AND period_id = ANY($2::uuid[])",
-			"DELETE FROM journal_exports WHERE tenant_id = $1 AND period_id = ANY($2::uuid[])",
-			"DELETE FROM payroll_periods WHERE tenant_id = $1 AND id = ANY($2::uuid[])",
-		}
-		for _, q := range queries {
-			tag, err := h.DB.Exec(ctx, q, tenantID, periodIDs)
-			total += tag.RowsAffected()
-			if err != nil {
-				return total, err
-			}
-		}
-		return total, nil
-	case gdpr.DataCategoryPerformance:
-		var total int64
-		tag, err := h.DB.Exec(ctx, `
-      UPDATE feedback
-      SET related_goal_id = NULL
-      WHERE tenant_id = $1
-        AND related_goal_id IN (SELECT id FROM goals WHERE tenant_id = $1 AND updated_at < $2)
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM review_responses
-      WHERE tenant_id = $1 AND submitted_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM review_tasks
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM review_cycles
-      WHERE tenant_id = $1 AND end_date < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM goal_comments
-      WHERE goal_id IN (SELECT id FROM goals WHERE tenant_id = $1 AND updated_at < $2)
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM goals
-      WHERE tenant_id = $1 AND updated_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM feedback
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM checkins
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM pips
-      WHERE tenant_id = $1 AND updated_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		return total, err
-	case gdpr.DataCategoryGDPR:
-		var total int64
-		tag, err := h.DB.Exec(ctx, `
-      DELETE FROM dsar_exports
-      WHERE tenant_id = $1 AND completed_at IS NOT NULL AND completed_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		if err != nil {
-			return total, err
-		}
-		tag, err = h.DB.Exec(ctx, `
-      DELETE FROM anonymization_jobs
-      WHERE tenant_id = $1 AND completed_at IS NOT NULL AND completed_at < $2
-    `, tenantID, cutoff)
-		total += tag.RowsAffected()
-		return total, err
-	case gdpr.DataCategoryAccessLogs:
-		tag, err := h.DB.Exec(ctx, `
-      DELETE FROM access_logs
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		return tag.RowsAffected(), err
-	case gdpr.DataCategoryNotifications:
-		tag, err := h.DB.Exec(ctx, `
-      DELETE FROM notifications
-      WHERE tenant_id = $1 AND created_at < $2
-    `, tenantID, cutoff)
-		return tag.RowsAffected(), err
-	default:
-		return 0, nil
+func generateDownloadToken() (string, error) {
+	buff := make([]byte, 32)
+	if _, err := rand.Read(buff); err != nil {
+		return "", err
 	}
+	return base64.RawURLEncoding.EncodeToString(buff), nil
 }

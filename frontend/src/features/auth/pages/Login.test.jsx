@@ -33,6 +33,6 @@ describe('Login page', () => {
     await userEvent.type(passwordInput, 'secret');
     await userEvent.click(button);
 
-    expect(loginMock).toHaveBeenCalledWith('user@example.com', 'secret');
+    expect(loginMock).toHaveBeenCalledWith('user@example.com', 'secret', '');
   });
 });

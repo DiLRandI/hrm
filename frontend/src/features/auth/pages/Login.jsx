@@ -7,6 +7,7 @@ export default function Login() {
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -21,7 +22,7 @@ export default function Login() {
     setLoading(true);
     setError('');
     try {
-      await login(email, password);
+      await login(email, password, mfaCode);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -42,6 +43,10 @@ export default function Login() {
           <label>
             Password
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </label>
+          <label>
+            MFA Code
+            <input type="text" value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} placeholder="123456" />
           </label>
           {error && <div className="error">{error}</div>}
           <button type="submit" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>

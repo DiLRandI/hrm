@@ -169,7 +169,7 @@ func (s *Service) scheduleRetention(ctx context.Context, interval time.Duration)
 }
 
 type retentionPolicy struct {
-	DataCategory string
+	DataCategory  string
 	RetentionDays int
 }
 

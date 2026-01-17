@@ -2,6 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
+import {
+  LEAVE_STATUS_PENDING,
+  LEAVE_STATUS_PENDING_HR,
+} from '../../../shared/constants/statuses.js';
 
 const downloadBlob = ({ blob, filename }) => {
   const url = URL.createObjectURL(blob);
@@ -22,6 +26,8 @@ export default function Leave() {
   const [policies, setPolicies] = useState([]);
   const [balances, setBalances] = useState([]);
   const [requests, setRequests] = useState([]);
+  const [requestOffset, setRequestOffset] = useState(0);
+  const [requestTotal, setRequestTotal] = useState(0);
   const [holidays, setHolidays] = useState([]);
   const [calendar, setCalendar] = useState([]);
   const [balanceReport, setBalanceReport] = useState([]);
@@ -48,6 +54,7 @@ export default function Leave() {
     entitlement: '',
     carryOverLimit: '',
     allowNegative: false,
+    requiresHrApproval: false,
   });
   const [holidayForm, setHolidayForm] = useState({
     date: '',
@@ -60,6 +67,8 @@ export default function Leave() {
     delta: '',
     reason: '',
   });
+
+  const REQUEST_LIMIT = 25;
 
   const typeLookup = useMemo(() => {
     return types.reduce((acc, t) => {
@@ -76,7 +85,6 @@ export default function Leave() {
         api.get('/leave/types'),
         api.get('/leave/policies'),
         api.get('/leave/balances'),
-        api.get('/leave/requests'),
         api.get('/leave/holidays'),
         api.get('/leave/calendar'),
         api.get('/leave/reports/balances'),
@@ -87,7 +95,6 @@ export default function Leave() {
         setTypes,
         setPolicies,
         setBalances,
-        setRequests,
         setHolidays,
         setCalendar,
         setBalanceReport,
@@ -101,6 +108,11 @@ export default function Leave() {
           setError(result.reason?.message || 'Failed to load leave data');
         }
       });
+
+      const { data, total } = await api.getWithMeta(`/leave/requests?limit=${REQUEST_LIMIT}&offset=${requestOffset}`);
+      const reqList = Array.isArray(data) ? data : [];
+      setRequests(reqList);
+      setRequestTotal(total ?? reqList.length);
     } catch (err) {
       setError(err.message);
     }
@@ -108,7 +120,18 @@ export default function Leave() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [requestOffset]);
+
+  const nextRequests = () => {
+    if (requestOffset + REQUEST_LIMIT >= requestTotal) {
+      return;
+    }
+    setRequestOffset(requestOffset + REQUEST_LIMIT);
+  };
+
+  const prevRequests = () => {
+    setRequestOffset(Math.max(0, requestOffset - REQUEST_LIMIT));
+  };
 
   const submitRequest = async (event) => {
     event.preventDefault();
@@ -148,6 +171,7 @@ export default function Leave() {
         entitlement: Number(policyForm.entitlement || 0),
         carryOverLimit: Number(policyForm.carryOverLimit || 0),
         allowNegative: policyForm.allowNegative,
+        requiresHrApproval: policyForm.requiresHrApproval,
       });
       setPolicyForm({
         leaveTypeId: '',
@@ -156,6 +180,7 @@ export default function Leave() {
         entitlement: '',
         carryOverLimit: '',
         allowNegative: false,
+        requiresHrApproval: false,
       });
       await load();
     } catch (err) {
@@ -299,18 +324,40 @@ export default function Leave() {
             <span>{req.startDate?.slice(0, 10)} → {req.endDate?.slice(0, 10)}</span>
             <span>{req.status}</span>
             <span className="row-actions">
-              {(isManager || isHR) && req.status === 'pending' && (
+              {(isManager || isHR) && req.status === LEAVE_STATUS_PENDING && (
                 <>
                   <button type="button" onClick={() => approveRequest(req.id)}>Approve</button>
                   <button type="button" className="ghost" onClick={() => rejectRequest(req.id)}>Reject</button>
                 </>
               )}
-              {!isHR && req.status === 'pending' && (
+              {isHR && req.status === LEAVE_STATUS_PENDING_HR && (
+                <>
+                  <button type="button" onClick={() => approveRequest(req.id)}>Approve</button>
+                  <button type="button" className="ghost" onClick={() => rejectRequest(req.id)}>Reject</button>
+                </>
+              )}
+              {!isHR && req.status === LEAVE_STATUS_PENDING && (
                 <button type="button" className="ghost" onClick={() => cancelRequest(req.id)}>Cancel</button>
               )}
             </span>
           </div>
         ))}
+      </div>
+      <div className="row-actions pagination">
+        <button type="button" className="ghost" onClick={prevRequests} disabled={requestOffset === 0}>
+          Prev
+        </button>
+        <small>
+          {requestTotal ? `${Math.min(requestOffset + REQUEST_LIMIT, requestTotal)} of ${requestTotal}` : '—'}
+        </small>
+        <button
+          type="button"
+          className="ghost"
+          onClick={nextRequests}
+          disabled={requestTotal ? requestOffset + REQUEST_LIMIT >= requestTotal : requests.length < REQUEST_LIMIT}
+        >
+          Next
+        </button>
       </div>
 
       <div className="card-grid">
@@ -408,6 +455,14 @@ export default function Leave() {
                 <option value="no">No negative</option>
                 <option value="yes">Allow negative</option>
               </select>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={policyForm.requiresHrApproval}
+                  onChange={(e) => setPolicyForm({ ...policyForm, requiresHrApproval: e.target.checked })}
+                />
+                Requires HR approval
+              </label>
               <button type="submit">Add policy</button>
             </form>
             <div className="table">
@@ -415,12 +470,14 @@ export default function Leave() {
                 <span>Type</span>
                 <span>Accrual</span>
                 <span>Entitlement</span>
+                <span>HR approval</span>
               </div>
               {policies.map((policy) => (
                 <div key={policy.id} className="table-row">
                   <span>{typeLookup[policy.leaveTypeId] || policy.leaveTypeId}</span>
                   <span>{policy.accrualRate} / {policy.accrualPeriod}</span>
                   <span>{policy.entitlement}</span>
+                  <span>{policy.requiresHrApproval ? 'Required' : 'No'}</span>
                 </div>
               ))}
             </div>

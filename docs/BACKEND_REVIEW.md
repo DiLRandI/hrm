@@ -13,36 +13,37 @@ Go backend under `cmd/`, `internal/`, and `migrations/`. Review focuses on archi
 - RBAC permissions are enforced on most routes; scoped filtering is present in leave, payroll, performance, and GDPR.
 - Audit logging exists for critical actions (leave, payroll, performance, GDPR).
 - Migrations cover core HR, leave, payroll, performance, GDPR, notifications, and idempotency.
+- Sensitive fields are encrypted at rest with application-level AES-GCM and key-based configuration.
+- Session rotation, MFA, and rate limiting on authentication endpoints are in place.
+- Metrics endpoint and job run history are available for ops visibility.
 
 ## Findings (Key Gaps)
 ### Security & Access Control
-- Sensitive fields (salary, bank account, national ID) are stored in plaintext; no field-level encryption.
-- Password reset tokens are hashed, but session invalidation/rotation policies are minimal.
 - Rate limiting is applied only to login/reset endpoints; other sensitive actions lack throttling.
 
 ### Data Integrity & Transactions
-- Multi-step workflows (e.g., payroll finalize, anonymization) are not wrapped in a single DB transaction, which can lead to partial updates on failure.
-- Idempotency is used for payroll finalize and CSV imports only; other sensitive operations (GDPR retention/anonymization) are not idempotent.
+- Multi-step workflows (e.g., payroll finalize) are not wrapped in a single DB transaction, which can lead to partial updates on failure.
+- Idempotency is used for payroll finalize and CSV imports; other sensitive operations (GDPR retention/anonymization) are not idempotent.
 
 ### Validation & Input Hygiene
 - Many handlers accept JSON payloads with minimal validation (enum values, numeric bounds, date ranges).
 - CSV import relies on best-effort parsing with limited schema validation.
 
 ### Performance & Scalability
-- List endpoints are unbounded; no pagination for large datasets (employees, access logs, notifications, audit, reports).
+- List endpoints now include pagination for employees, leave requests, audit logs, access logs, payroll lists, and DSAR exports; performance-related lists could still benefit from paging.
 - Some operations run per-employee loops with multiple queries (payroll run), which can be expensive at scale.
 - Missing indexes for common filters (tenant_id + foreign keys) may cause slow scans as data grows.
 
 ### Observability & Ops
-- No metrics or tracing endpoints; logs are present but not aggregated by request outcome.
-- Background jobs (leave accrual, retention) are manual; no scheduler or job status API/UI beyond summary responses.
+- Metrics endpoint exists; tracing is limited to request IDs without distributed tracing.
+- Background jobs run on an in-process scheduler with job run history exposed in reports.
 
 ## Recommendations (Prioritized)
-1. Add field-level encryption for sensitive employee data using a managed key (KMS/ENV) and document rotation.
-2. Introduce transactional boundaries for multi-step workflows (payroll finalize, anonymization).
-3. Add pagination and filters to all list endpoints; add indexes on tenant_id + foreign keys used in filters.
-4. Centralize validation with typed request structs + enum validation helpers.
-5. Add metrics/tracing endpoints and structured audit log access API.
+1. Introduce transactional boundaries for multi-step workflows (payroll finalize, anonymization).
+2. Add pagination and filters to remaining large list endpoints; add indexes on tenant_id + foreign keys used in filters.
+3. Centralize validation with typed request structs + enum validation helpers.
+4. Expand rate limiting to other sensitive operations (imports, approvals).
+5. Add distributed tracing or OpenTelemetry export if required.
 
 ## Testing Notes
-- Unit tests cover some domains; integration tests for authorization scoping and BOLA checks are still light.
+- Unit tests cover domains; integration tests now cover HR journeys and BOLA guards, but more role-specific coverage is still useful.

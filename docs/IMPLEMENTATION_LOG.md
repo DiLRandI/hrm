@@ -4,6 +4,11 @@ Start: 2026-01-17
 
 ## Log
 - 2026-01-17: Initialized project structure and documentation tracking.
+- 2026-01-17: Implemented encryption-at-rest for sensitive fields, MFA, refresh token rotation, audit log export UI, and GDPR consent/retention/anonymization flows with secure downloads.
+- 2026-01-17: Added job scheduler (leave accrual + retention), metrics endpoint, email notification support, and job runs dashboard.
+- 2026-01-17: Added HR org chart/role management UI, leave HR-approval steps, payroll pay-group-aware runs, journal templates, and performance review templates enforcement.
+- 2026-01-17: Added pagination across key list endpoints and UI surfaces (employees, leave requests, DSAR/access logs, audit).
+- 2026-01-17: Expanded tests with backend journey coverage, BOLA guard checks, and frontend workflow tests; added Playwright smoke E2E.
 
 ## Decisions
 - Tenancy: single-tenant per deployment with `tenant_id` column reserved for future multi-tenant support.
@@ -11,9 +16,7 @@ Start: 2026-01-17
 - Payslip PDFs: render server-side HTML → PDF using a pluggable renderer (default: HTML download if no renderer configured).
 
 ## Pending
-- Security hardening: encryption at rest for sensitive fields, CSP/HSTS tuning, refresh token rotation.
-- Observability: metrics + tracing endpoints.
-- End-to-end UI tests (Playwright) and broader API integration tests.
+- None.
 - 2026-01-17: Created initial database schema migration (core, leave, payroll, performance, GDPR, audit, notifications).
 - 2026-01-17: Added password reset table to schema.
 - 2026-01-17: Added Go backend skeleton with auth, core HR, leave, payroll, performance, GDPR, notifications, and reports endpoints.

@@ -4,9 +4,13 @@ import { api } from '../../../services/apiClient.js';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
 
 export default function Dashboard() {
-  const { user, employee } = useAuth();
+  const { user, employee, refresh } = useAuth();
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [mfaSecret, setMfaSecret] = useState('');
+  const [mfaUrl, setMfaUrl] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaMessage, setMfaMessage] = useState('');
 
   useEffect(() => {
     const load = async () => {
@@ -46,6 +50,82 @@ export default function Dashboard() {
           ))}
         </div>
       )}
+
+      <div className="card">
+        <h3>Multi-factor authentication</h3>
+        <p>Protect your account with a time-based code.</p>
+        {user?.mfaEnabled ? (
+          <>
+            <p className="status-tag success">MFA enabled</p>
+            <div className="inline-form">
+              <input placeholder="MFA code" value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} />
+              <button
+                type="button"
+                onClick={async () => {
+                  setMfaMessage('');
+                  try {
+                    await api.post('/auth/mfa/disable', { code: mfaCode });
+                    setMfaCode('');
+                    await refresh();
+                    setMfaMessage('MFA disabled.');
+                  } catch (err) {
+                    setMfaMessage(err.message);
+                  }
+                }}
+              >
+                Disable MFA
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="status-tag">MFA not enabled</p>
+            <div className="inline-form">
+              <button
+                type="button"
+                onClick={async () => {
+                  setMfaMessage('');
+                  try {
+                    const result = await api.post('/auth/mfa/setup', {});
+                    setMfaSecret(result.secret);
+                    setMfaUrl(result.otpauthUrl);
+                  } catch (err) {
+                    setMfaMessage(err.message);
+                  }
+                }}
+              >
+                Generate MFA secret
+              </button>
+              {mfaSecret && (
+                <div className="inline-note">
+                  <strong>Secret:</strong> {mfaSecret}
+                  {mfaUrl && <div className="hint">otpauth URL: {mfaUrl}</div>}
+                </div>
+              )}
+            </div>
+            <div className="inline-form">
+              <input placeholder="MFA code" value={mfaCode} onChange={(e) => setMfaCode(e.target.value)} />
+              <button
+                type="button"
+                onClick={async () => {
+                  setMfaMessage('');
+                  try {
+                    await api.post('/auth/mfa/enable', { code: mfaCode });
+                    setMfaCode('');
+                    await refresh();
+                    setMfaMessage('MFA enabled.');
+                  } catch (err) {
+                    setMfaMessage(err.message);
+                  }
+                }}
+              >
+                Enable MFA
+              </button>
+            </div>
+          </>
+        )}
+        {mfaMessage && <div className="hint">{mfaMessage}</div>}
+      </div>
     </section>
   );
 }

@@ -68,12 +68,18 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		core.FilterEmployeeFields(emp, user, isSelf, false)
 	}
 
+	var mfaEnabled bool
+	if err := h.Store.DB.QueryRow(r.Context(), "SELECT mfa_enabled FROM users WHERE id = $1", user.UserID).Scan(&mfaEnabled); err != nil {
+		slog.Warn("mfa status lookup failed", "err", err)
+	}
+
 	api.Success(w, map[string]any{
-		"user": map[string]string{
-			"id":       user.UserID,
-			"tenantId": user.TenantID,
-			"roleId":   user.RoleID,
-			"role":     user.RoleName,
+		"user": map[string]any{
+			"id":         user.UserID,
+			"tenantId":   user.TenantID,
+			"roleId":     user.RoleID,
+			"role":       user.RoleName,
+			"mfaEnabled": mfaEnabled,
 		},
 		"employee": emp,
 	}, middleware.GetRequestID(r.Context()))
@@ -117,14 +123,8 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 
 	page := shared.ParsePagination(r, 100, 500)
 	total := len(filtered)
-	start := page.Offset
-	if start > total {
-		start = total
-	}
-	end := start + page.Limit
-	if end > total {
-		end = total
-	}
+	start := min(page.Offset, total)
+	end := min(start+page.Limit, total)
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, filtered[start:end], middleware.GetRequestID(r.Context()))
 }
@@ -474,8 +474,7 @@ func (h *Handler) handleOrgChart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleManagerHistory(w http.ResponseWriter, r *http.Request) {
-	user, ok := middleware.GetUser(r.Context())
-	if !ok {
+	if _, ok := middleware.GetUser(r.Context()); !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -583,6 +582,11 @@ func (h *Handler) handleUpdateRolePermissions(w http.ResponseWriter, r *http.Req
 	}
 
 	roleID := chi.URLParam(r, "roleID")
+	var roleTenant string
+	if err := h.Store.DB.QueryRow(r.Context(), "SELECT tenant_id::text FROM roles WHERE id = $1", roleID).Scan(&roleTenant); err != nil || roleTenant != user.TenantID {
+		api.Fail(w, http.StatusForbidden, "forbidden", "role not found", middleware.GetRequestID(r.Context()))
+		return
+	}
 	var payload struct {
 		Permissions []string `json:"permissions"`
 	}

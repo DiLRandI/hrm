@@ -19,12 +19,14 @@ services:
     environment:
       DATABASE_URL: postgres://hrm:hrm@db:5432/hrm?sslmode=disable
       JWT_SECRET: dev-secret
+      DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef"
       APP_ADDR: :8080
       SEED_TENANT_NAME: "Default Tenant"
       SEED_ADMIN_EMAIL: admin@example.com
       SEED_ADMIN_PASSWORD: ChangeMe123!
       SEED_SYSTEM_ADMIN_EMAIL: sysadmin@example.com
       SEED_SYSTEM_ADMIN_PASSWORD: ChangeMe123!
+      EMAIL_ENABLED: "false"
     ports:
       - "8080:8080"
     depends_on:

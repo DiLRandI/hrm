@@ -4,11 +4,13 @@ import "testing"
 
 func TestBuildDSARPayload(t *testing.T) {
 	employee := map[string]any{"id": "e1"}
-	leaves := []map[string]any{{"id": "l1"}}
-	payroll := []map[string]any{{"id": "p1"}}
-	goals := []map[string]any{{"id": "g1"}}
+	datasets := map[string]any{
+		"leaveRequests":  []map[string]any{{"id": "l1"}},
+		"payrollResults": []map[string]any{{"id": "p1"}},
+		"goals":          []map[string]any{{"id": "g1"}},
+	}
 
-	payload := BuildDSARPayload(employee, leaves, payroll, goals)
+	payload := BuildDSARPayload(employee, datasets)
 
 	if payload["employee"] == nil {
 		t.Fatal("expected employee in payload")

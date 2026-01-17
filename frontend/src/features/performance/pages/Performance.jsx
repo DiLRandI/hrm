@@ -4,12 +4,15 @@ import { useAuth } from '../../auth/auth.jsx';
 import {
   GOAL_STATUS_ACTIVE,
   REVIEW_TASK_ASSIGNED,
+  REVIEW_TASK_SELF_PENDING,
+  REVIEW_TASK_MANAGER_PENDING,
+  REVIEW_TASK_HR_PENDING,
   PIP_STATUS_ACTIVE,
   PIP_STATUS_CLOSED,
   REVIEW_CYCLE_CLOSED,
 } from '../../../shared/constants/statuses.js';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
-import { FEEDBACK_TYPES, REVIEW_RESPONSE_ROLES } from '../../../shared/constants/performance.js';
+import { FEEDBACK_TYPES } from '../../../shared/constants/performance.js';
 
 export default function Performance() {
   const { user, employee } = useAuth();
@@ -31,8 +34,9 @@ export default function Performance() {
 
   const [goalForm, setGoalForm] = useState({ title: '', metric: '', dueDate: '', weight: '' });
   const [templateForm, setTemplateForm] = useState({ name: '', ratingScale: '', questions: '' });
-  const [cycleForm, setCycleForm] = useState({ name: '', startDate: '', endDate: '', templateId: '' });
-  const [reviewForm, setReviewForm] = useState({ taskId: '', role: 'self', rating: '', responses: '' });
+  const [cycleForm, setCycleForm] = useState({ name: '', startDate: '', endDate: '', templateId: '', hrRequired: false });
+  const [reviewForm, setReviewForm] = useState({ taskId: '', rating: '' });
+  const [reviewAnswers, setReviewAnswers] = useState([]);
   const [feedbackForm, setFeedbackForm] = useState({ toEmployeeId: '', type: 'recognition', message: '', relatedGoalId: '' });
   const [checkinForm, setCheckinForm] = useState({ employeeId: '', notes: '', private: true });
   const [pipForm, setPipForm] = useState({ employeeId: '', objectives: '[]', milestones: '[]', reviewDates: '[]' });
@@ -43,6 +47,12 @@ export default function Performance() {
       return acc;
     }, {});
   }, [employees]);
+
+  const selectedTask = tasks.find((task) => task.id === reviewForm.taskId);
+  const selectedCycle = cycles.find((cycle) => cycle.id === selectedTask?.cycleId);
+  const selectedTemplate = templates.find((template) => template.id === selectedCycle?.templateId);
+  const templateQuestions = Array.isArray(selectedTemplate?.questions) ? selectedTemplate.questions : [];
+  const templateRatings = Array.isArray(selectedTemplate?.ratingScale) ? selectedTemplate.ratingScale : [];
 
   const load = async () => {
     setError('');
@@ -85,6 +95,14 @@ export default function Performance() {
     load();
   }, [role]);
 
+  useEffect(() => {
+    if (!reviewForm.taskId) {
+      setReviewAnswers([]);
+      return;
+    }
+    setReviewAnswers((prev) => templateQuestions.map((_, idx) => prev[idx] || ''));
+  }, [reviewForm.taskId, selectedTemplate?.id]);
+
   const submitGoal = async (e) => {
     e.preventDefault();
     try {
@@ -121,7 +139,7 @@ export default function Performance() {
     e.preventDefault();
     try {
       await api.post('/performance/review-cycles', cycleForm);
-      setCycleForm({ name: '', startDate: '', endDate: '', templateId: '' });
+      setCycleForm({ name: '', startDate: '', endDate: '', templateId: '', hrRequired: false });
       await load();
     } catch (err) {
       setError(err.message);
@@ -144,16 +162,25 @@ export default function Performance() {
       return;
     }
     try {
-      const responses = reviewForm.responses ? JSON.parse(reviewForm.responses) : [];
+      const responses = templateQuestions.length
+        ? templateQuestions.map((question, idx) => ({
+            question: question?.question || question?.label || String(question),
+            answer: reviewAnswers[idx] || '',
+          }))
+        : reviewAnswers[0]
+          ? [{ question: 'Comments', answer: reviewAnswers[0] }]
+          : [];
+      const roleValue = isHR ? 'hr' : isManager ? 'manager' : 'self';
       await api.post(`/performance/review-tasks/${reviewForm.taskId}/responses`, {
-        role: reviewForm.role,
+        role: roleValue,
         rating: reviewForm.rating ? Number(reviewForm.rating) : null,
         responses,
       });
-      setReviewForm({ taskId: '', role: 'self', rating: '', responses: '' });
+      setReviewForm({ taskId: '', rating: '' });
+      setReviewAnswers([]);
       await load();
     } catch (err) {
-      setError(err.message || 'Invalid JSON for responses');
+      setError(err.message);
     }
   };
 
@@ -291,6 +318,14 @@ export default function Performance() {
                     </option>
                   ))}
                 </select>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={cycleForm.hrRequired}
+                    onChange={(e) => setCycleForm({ ...cycleForm, hrRequired: e.target.checked })}
+                  />
+                  Require HR final review
+                </label>
                 <button type="submit">Create cycle</button>
               </form>
             )}
@@ -299,6 +334,7 @@ export default function Performance() {
                 <span>Name</span>
                 <span>Status</span>
                 <span>Dates</span>
+                <span>HR review</span>
                 <span>Actions</span>
               </div>
               {cycles.map((cycle) => (
@@ -306,6 +342,7 @@ export default function Performance() {
                   <span>{cycle.name}</span>
                   <span>{cycle.status}</span>
                   <span>{cycle.startDate?.slice(0, 10)} → {cycle.endDate?.slice(0, 10)}</span>
+                  <span>{cycle.hrRequired ? 'Required' : 'No'}</span>
                   <span className="row-actions">
                     {isHR && cycle.status !== REVIEW_CYCLE_CLOSED && (
                       <button onClick={() => finalizeCycle(cycle.id)}>Finalize</button>
@@ -328,25 +365,49 @@ export default function Performance() {
                 </option>
               ))}
             </select>
-            <select value={reviewForm.role} onChange={(e) => setReviewForm({ ...reviewForm, role: e.target.value })}>
-              {REVIEW_RESPONSE_ROLES.map((roleOption) => (
-                <option key={roleOption.value} value={roleOption.value}>
-                  {roleOption.label}
-                </option>
-              ))}
-            </select>
-            <input
-              type="number"
-              step="0.1"
-              placeholder="Rating (optional)"
-              value={reviewForm.rating}
-              onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
-            />
-            <textarea
-              placeholder='Responses JSON, e.g. [{"question":"...","answer":"..."}]'
-              value={reviewForm.responses}
-              onChange={(e) => setReviewForm({ ...reviewForm, responses: e.target.value })}
-            />
+            {templateRatings.length > 0 ? (
+              <select
+                value={reviewForm.rating}
+                onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
+              >
+                <option value="">Select rating</option>
+                {templateRatings.map((rating) => (
+                  <option key={rating.value ?? rating.label} value={rating.value}>
+                    {rating.label ?? rating.value}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="number"
+                step="0.1"
+                placeholder="Rating (optional)"
+                value={reviewForm.rating}
+                onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
+              />
+            )}
+            {templateQuestions.length > 0 ? (
+              templateQuestions.map((question, idx) => (
+                <label key={question.id || idx} className="stack">
+                  <span className="hint">{question.question || question.label || `Question ${idx + 1}`}</span>
+                  <textarea
+                    value={reviewAnswers[idx] || ''}
+                    onChange={(e) => {
+                      const next = [...reviewAnswers];
+                      next[idx] = e.target.value;
+                      setReviewAnswers(next);
+                    }}
+                    required
+                  />
+                </label>
+              ))
+            ) : (
+              <textarea
+                placeholder="Comments"
+                value={reviewAnswers[0] || ''}
+                onChange={(e) => setReviewAnswers([e.target.value])}
+              />
+            )}
             <button type="submit">Submit review</button>
           </form>
           <div className="table">
@@ -450,6 +511,16 @@ export default function Performance() {
             <p><strong>Goals completed:</strong> {summary.goalsCompleted} / {summary.goalsTotal}</p>
             <p><strong>Review tasks completed:</strong> {summary.reviewTasksCompleted} / {summary.reviewTasksTotal}</p>
             <p><strong>Review completion rate:</strong> {(summary.reviewCompletionRate || 0) * 100}%</p>
+            {summary.ratingDistribution && (
+              <div className="list">
+                {Object.entries(summary.ratingDistribution).map(([rating, count]) => (
+                  <div key={rating} className="list-item">
+                    <strong>Rating {rating}</strong>
+                    <span>{count}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

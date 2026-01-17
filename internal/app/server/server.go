@@ -12,12 +12,14 @@ import (
 
 	"hrm/internal/domain/core"
 	"hrm/internal/domain/notifications"
-	cryptoutil "hrm/internal/platform/crypto"
 	"hrm/internal/platform/config"
+	cryptoutil "hrm/internal/platform/crypto"
 	"hrm/internal/platform/db"
 	"hrm/internal/platform/email"
 	"hrm/internal/platform/jobs"
 	"hrm/internal/platform/metrics"
+	"hrm/internal/transport/http/api"
+	audithandler "hrm/internal/transport/http/handlers/audit"
 	authhandler "hrm/internal/transport/http/handlers/auth"
 	corehandler "hrm/internal/transport/http/handlers/core"
 	gdprhandler "hrm/internal/transport/http/handlers/gdpr"
@@ -27,15 +29,14 @@ import (
 	performancehandler "hrm/internal/transport/http/handlers/performance"
 	reportshandler "hrm/internal/transport/http/handlers/reports"
 	"hrm/internal/transport/http/middleware"
-	"hrm/internal/transport/http/api"
 )
 
 type App struct {
-	Config config.Config
-	DB     *db.Pool
-	Router http.Handler
-	Stop   context.CancelFunc
-	Jobs   *jobs.Service
+	Config  config.Config
+	DB      *db.Pool
+	Router  http.Handler
+	Stop    context.CancelFunc
+	Jobs    *jobs.Service
 	Metrics *metrics.Collector
 }
 
@@ -74,10 +75,10 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	router := buildRouter(cfg, pool, coreStore, cryptoSvc, notifySvc, jobsSvc, metricsCollector)
 
 	return &App{
-		Config: cfg,
-		DB:     pool,
-		Router: router,
-		Jobs:   jobsSvc,
+		Config:  cfg,
+		DB:      pool,
+		Router:  router,
+		Jobs:    jobsSvc,
 		Metrics: metricsCollector,
 	}, nil
 }
@@ -172,6 +173,9 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 
 		coreHandler := corehandler.NewHandler(coreStore)
 		coreHandler.RegisterRoutes(r)
+
+		auditHandler := audithandler.NewHandler(pool, coreStore)
+		auditHandler.RegisterRoutes(r)
 
 		leaveHandler := leavehandler.NewHandler(pool, coreStore, notifySvc, jobsSvc)
 		leaveHandler.RegisterRoutes(r)

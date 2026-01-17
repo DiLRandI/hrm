@@ -2,7 +2,9 @@ package notificationshandler
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -10,6 +12,7 @@ import (
 	"hrm/internal/domain/notifications"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
+	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
@@ -36,12 +39,19 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := h.Service.List(r.Context(), user.TenantID, user.UserID)
+	page := shared.ParsePagination(r, 100, 500)
+	var total int
+	if err := h.Service.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM notifications WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&total); err != nil {
+		slog.Warn("notification count failed", "err", err)
+	}
+
+	items, err := h.Service.List(r.Context(), user.TenantID, user.UserID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "notification_list_failed", "failed to list notifications", middleware.GetRequestID(r.Context()))
 		return
 	}
 
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, items, middleware.GetRequestID(r.Context()))
 }
 

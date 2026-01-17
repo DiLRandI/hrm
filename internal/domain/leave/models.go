@@ -12,14 +12,14 @@ type LeaveType struct {
 }
 
 type LeavePolicy struct {
-	ID            string  `json:"id"`
-	LeaveTypeID   string  `json:"leaveTypeId"`
-	AccrualRate   float64 `json:"accrualRate"`
-	AccrualPeriod string  `json:"accrualPeriod"`
-	Entitlement   float64 `json:"entitlement"`
-	CarryOver     float64 `json:"carryOverLimit"`
-	AllowNegative bool    `json:"allowNegative"`
-	RequiresHRApproval bool `json:"requiresHrApproval"`
+	ID                 string  `json:"id"`
+	LeaveTypeID        string  `json:"leaveTypeId"`
+	AccrualRate        float64 `json:"accrualRate"`
+	AccrualPeriod      string  `json:"accrualPeriod"`
+	Entitlement        float64 `json:"entitlement"`
+	CarryOver          float64 `json:"carryOverLimit"`
+	AllowNegative      bool    `json:"allowNegative"`
+	RequiresHRApproval bool    `json:"requiresHrApproval"`
 }
 
 type LeaveRequest struct {

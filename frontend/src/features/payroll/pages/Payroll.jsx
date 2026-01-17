@@ -30,6 +30,7 @@ export default function Payroll() {
   const [schedules, setSchedules] = useState([]);
   const [groups, setGroups] = useState([]);
   const [elements, setElements] = useState([]);
+  const [journalTemplates, setJournalTemplates] = useState([]);
   const [periods, setPeriods] = useState([]);
   const [inputs, setInputs] = useState([]);
   const [adjustments, setAdjustments] = useState([]);
@@ -57,7 +58,15 @@ export default function Payroll() {
     amount: '',
     source: 'manual',
   });
-  const [adjustmentForm, setAdjustmentForm] = useState({ employeeId: '', description: '', amount: '' });
+  const [adjustmentForm, setAdjustmentForm] = useState({ employeeId: '', description: '', amount: '', effectiveDate: '' });
+  const [journalTemplateForm, setJournalTemplateForm] = useState({
+    name: '',
+    expenseAccount: '',
+    deductionAccount: '',
+    cashAccount: '',
+    headers: '',
+  });
+  const [journalTemplateId, setJournalTemplateId] = useState('');
   const [importFile, setImportFile] = useState(null);
 
   const scheduleLookup = useMemo(() => {
@@ -82,11 +91,12 @@ export default function Payroll() {
         api.get('/payroll/schedules'),
         api.get('/payroll/groups'),
         api.get('/payroll/elements'),
+        api.get('/payroll/journal-templates'),
         api.get('/payroll/periods'),
         api.get(payslipPath),
       ]);
 
-      const setters = [setSchedules, setGroups, setElements, setPeriods, setPayslips];
+      const setters = [setSchedules, setGroups, setElements, setJournalTemplates, setPeriods, setPayslips];
       results.forEach((result, idx) => {
         if (result.status === 'fulfilled') {
           setters[idx](Array.isArray(result.value) ? result.value : []);
@@ -95,7 +105,7 @@ export default function Payroll() {
         }
       });
 
-      const periodList = results[3]?.status === 'fulfilled' ? results[3].value : [];
+      const periodList = results[4]?.status === 'fulfilled' ? results[4].value : [];
       if (!selectedPeriodId && Array.isArray(periodList) && periodList.length > 0) {
         setSelectedPeriodId(periodList[0].id);
       }
@@ -195,6 +205,35 @@ export default function Payroll() {
         taxable: elementForm.taxable,
       });
       setElementForm({ name: '', elementType: 'earning', calcType: 'fixed', amount: '', taxable: true });
+      await loadBase();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const createJournalTemplate = async (e) => {
+    e.preventDefault();
+    setError('');
+    try {
+      const headers = journalTemplateForm.headers
+        ? journalTemplateForm.headers.split(',').map((h) => h.trim()).filter(Boolean)
+        : [];
+      await api.post('/payroll/journal-templates', {
+        name: journalTemplateForm.name,
+        config: {
+          expenseAccount: journalTemplateForm.expenseAccount,
+          deductionAccount: journalTemplateForm.deductionAccount,
+          cashAccount: journalTemplateForm.cashAccount,
+          headers,
+        },
+      });
+      setJournalTemplateForm({
+        name: '',
+        expenseAccount: '',
+        deductionAccount: '',
+        cashAccount: '',
+        headers: '',
+      });
       await loadBase();
     } catch (err) {
       setError(err.message);
@@ -302,8 +341,9 @@ export default function Payroll() {
         employeeId: adjustmentForm.employeeId,
         description: adjustmentForm.description,
         amount: Number(adjustmentForm.amount || 0),
+        effectiveDate: adjustmentForm.effectiveDate,
       });
-      setAdjustmentForm({ employeeId: '', description: '', amount: '' });
+      setAdjustmentForm({ employeeId: '', description: '', amount: '', effectiveDate: '' });
       await loadPeriodDetails(selectedPeriodId);
     } catch (err) {
       setError(err.message);
@@ -321,7 +361,8 @@ export default function Payroll() {
 
   const exportJournal = async (id) => {
     try {
-      const result = await api.download(`/payroll/periods/${id}/export/journal`);
+      const templateParam = journalTemplateId ? `?templateId=${journalTemplateId}` : '';
+      const result = await api.download(`/payroll/periods/${id}/export/journal${templateParam}`);
       downloadBlob(result);
     } catch (err) {
       setError(err.message);
@@ -500,6 +541,50 @@ export default function Payroll() {
               ))}
             </div>
           </div>
+
+          <div className="card">
+            <h3>Journal templates</h3>
+            <form className="stack" onSubmit={createJournalTemplate}>
+              <input
+                placeholder="Template name"
+                value={journalTemplateForm.name}
+                onChange={(e) => setJournalTemplateForm({ ...journalTemplateForm, name: e.target.value })}
+                required
+              />
+              <input
+                placeholder="Expense account"
+                value={journalTemplateForm.expenseAccount}
+                onChange={(e) => setJournalTemplateForm({ ...journalTemplateForm, expenseAccount: e.target.value })}
+              />
+              <input
+                placeholder="Deduction account"
+                value={journalTemplateForm.deductionAccount}
+                onChange={(e) => setJournalTemplateForm({ ...journalTemplateForm, deductionAccount: e.target.value })}
+              />
+              <input
+                placeholder="Cash account"
+                value={journalTemplateForm.cashAccount}
+                onChange={(e) => setJournalTemplateForm({ ...journalTemplateForm, cashAccount: e.target.value })}
+              />
+              <input
+                placeholder="Headers (comma-separated)"
+                value={journalTemplateForm.headers}
+                onChange={(e) => setJournalTemplateForm({ ...journalTemplateForm, headers: e.target.value })}
+              />
+              <button type="submit">Add template</button>
+            </form>
+            <div className="list">
+              {journalTemplates.map((template) => (
+                <div key={template.id} className="list-item">
+                  <div>
+                    <strong>{template.name}</strong>
+                    <p>{template.config?.expenseAccount || 'Default mapping'}</p>
+                  </div>
+                  <small>{template.createdAt?.slice(0, 10)}</small>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -530,6 +615,18 @@ export default function Payroll() {
           />
           <button type="submit">Create period</button>
         </form>
+      )}
+
+      {isHR && (
+        <div className="row-actions">
+          <label className="inline-note">Journal template</label>
+          <select value={journalTemplateId} onChange={(e) => setJournalTemplateId(e.target.value)}>
+            <option value="">Default template</option>
+            {journalTemplates.map((template) => (
+              <option key={template.id} value={template.id}>{template.name}</option>
+            ))}
+          </select>
+        </div>
       )}
 
       <div className="table">
@@ -666,6 +763,11 @@ export default function Payroll() {
                   onChange={(e) => setAdjustmentForm({ ...adjustmentForm, amount: e.target.value })}
                   required
                 />
+                <input
+                  type="date"
+                  value={adjustmentForm.effectiveDate}
+                  onChange={(e) => setAdjustmentForm({ ...adjustmentForm, effectiveDate: e.target.value })}
+                />
                 <button type="submit">Add adjustment</button>
               </form>
             )}
@@ -674,12 +776,14 @@ export default function Payroll() {
                 <span>Employee</span>
                 <span>Description</span>
                 <span>Amount</span>
+                <span>Effective</span>
               </div>
               {adjustments.map((adj) => (
                 <div key={adj.id} className="table-row">
                   <span>{adj.employeeId}</span>
                   <span>{adj.description}</span>
                   <span>{adj.amount}</span>
+                  <span>{adj.effectiveDate || '—'}</span>
                 </div>
               ))}
             </div>

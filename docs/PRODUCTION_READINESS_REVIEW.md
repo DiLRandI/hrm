@@ -4,7 +4,7 @@ Date: 2026-01-17
 Scope: Go backend (`cmd/`, `internal/`), React frontend (`frontend/`), Postgres schema (`migrations/`).
 
 ## Executive Summary
-This codebase shows a clear domain-based structure and a consistent API envelope, but it is not production-ready yet. There are multiple security and operational gaps (authorization, secrets, session management, rate limiting, input validation, and transport hardening) that fall short of current industry baselines (OWASP ASVS, OWASP API Security Top 10, and NIST guidance). The most urgent risks are broken object-level authorization, insufficient role enforcement, and weak secret/config defaults.
+The codebase now covers the critical security and compliance baselines required for MVP production readiness (RBAC scoping, audit access, MFA readiness, encryption at rest, session rotation, and metrics). Remaining gaps are mostly around broader rate limiting, stricter input validation, and optional transport hardening that depends on deployment environment (TLS termination and CSP tuning).
 
 ## Architecture & Code Patterns Observed
 
@@ -22,104 +22,36 @@ This codebase shows a clear domain-based structure and a consistent API envelope
 - UI state and data fetching are local to pages (no shared query/cache layer).
 
 ## Production Readiness Verdict
-**Not production-ready.** The current implementation lacks several security controls and operational safeguards expected in production. The most significant gaps are authorization enforcement, secret/config hardening, and API abuse protections.
+**Conditionally production-ready** for controlled SMEs with standard reverse-proxy TLS termination. Remaining gaps are non-blocking but should be addressed before scaling or exposure to untrusted networks.
 
 ## Security Findings (Highest Priority First)
 
-### P0 (Critical)
-1) **Broken Object-Level Authorization (BOLA)**
-   - Several endpoints accept IDs or query parameters without verifying ownership or role-scoped access.
-   - Examples:
-     - Leave balances can be queried with arbitrary `employeeId`.
-     - Performance goals and review tasks list across the whole tenant.
-     - GDPR DSAR listing/requesting is not restricted to HR/admin roles.
-   - Impact: data exfiltration across employees within a tenant (OWASP API Security Top 10).
+### Addressed (Resolved)
+- **BOLA + role enforcement gaps**: permissions and role checks now guard all core routes; list endpoints are scoped by role and tenant.
+- **Default secrets enforcement**: config validation now rejects unsafe defaults in production mode.
+- **Session rotation & logout invalidation**: refresh rotation and session revocation are implemented.
+- **Password reset token hashing**: reset tokens are stored hashed.
+- **Sensitive data at rest**: salary/bank/national IDs are encrypted using AES-GCM with a configured key.
+- **Security headers**: CSP/HSTS and X-Content-Type-Options are set via middleware.
+- **Audit trails**: audit log API + export added for critical actions.
 
-2) **Role Enforcement Gaps**
-   - Some endpoints intended for HR/manager use are not guarded by role checks (e.g., reports dashboards, DSAR list).
-   - A permission middleware exists but is not used.
-
-3) **Default Secrets and Seeded Admin Credentials**
-   - `JWT_SECRET` defaults to `change-me`, seed admin password defaults to `ChangeMe123!`.
-   - In production this is a direct compromise risk if envs are misconfigured.
-
-### P1 (High)
-4) **Session Management Weaknesses**
-   - JWTs are short-lived but there is no refresh rotation or server-side invalidation.
-   - Logout is a no-op; sessions table exists but is unused.
-
-5) **Password Reset Tokens Stored in Plaintext**
-   - Reset tokens are stored raw and never hashed; a DB read leak exposes reset tokens.
-
-6) **Missing Rate Limiting / Abuse Protection**
-   - Login and password reset endpoints have no throttling or lockout.
-   - No global request rate limiting for API.
-
-7) **Sensitive Data at Rest**
-   - Salary, bank account, national ID are stored in plaintext.
-   - There is no enforced encryption-at-rest policy in code or migrations.
-
-### P2 (Medium)
-8) **Missing Security Headers / Transport Hardening**
-   - No HSTS, CSP, X-Content-Type-Options, etc.
-   - No TLS enforcement (assumes upstream proxy handles it).
-
-9) **Input Validation & Payload Limits**
-   - JSON payloads are decoded without size limits and minimal validation.
-   - No schema validation, enum checks, or consistent input normalization.
-
-10) **Insufficient Audit Trails**
-    - There are access logs for employee profile reads, but not for critical changes (payroll runs, GDPR exports, role changes, data edits).
+### Remaining (P1/P2)
+- **Broader rate limiting**: only auth endpoints are throttled; imports and admin actions would benefit from additional limits.
+- **Input validation**: payloads still rely on basic checks; schema validation and enum checks remain lightweight.
+- **TLS enforcement**: still relies on upstream proxy termination (expected for hybrid deployments).
 
 ## Operational & Reliability Gaps
-- No graceful shutdown / server timeouts (risk of slowloris or hanging connections).
-- No structured tracing or metrics.
-- Migrations and seeding run at startup (undesirable for production releases).
-- No pagination for large list endpoints.
-- Limited integration and API tests; no end-to-end coverage.
+- Graceful shutdown and HTTP timeouts are in place; distributed tracing is not (request IDs only).
+- Migrations/seeding remain toggleable via config; production should disable seeding.
+- Pagination is available for high-volume lists, but some list views still lack filtering/search.
+- Integration tests and E2E coverage are improved but not exhaustive for every workflow.
 
 ## Recommended Improvements (Prioritized)
-
-### Security & Access Control
-- Enforce authorization on every endpoint with explicit ownership/role checks.
-- Replace role checks with permission middleware (use `RequirePermission`).
-- Add scope checks for all employee-related resources (BOLA prevention).
-- Hash password reset tokens before storage; enforce one-time use and rotation.
-- Add login/reset rate limiting and account lockout thresholds.
-- Enforce config validation at startup: refuse defaults for `JWT_SECRET`, admin seed passwords.
-- Add MFA readiness (flags exist in DB but no implementation).
-- Introduce audit logging for sensitive actions and data changes.
-
-### Auth & Session Management
-- Implement refresh tokens with rotation and revocation (or short-lived tokens + session store).
-- Add server-side token invalidation for logout and user disable.
-
-### Transport & API Hardening
-- Add HTTP server timeouts (read, header, write, idle) and max header size.
-- Add security headers (CSP, HSTS, X-Content-Type-Options, Referrer-Policy).
-- Add CORS policy if frontends are served cross-origin.
-- Set JSON body size limits for all handlers (middleware).
-
-### Data Protection
-- Encrypt sensitive fields at rest (DB-level or application-level).
-- Consider field-level encryption for national ID, bank account, salary.
-- Ensure DSAR exports are stored in secure object storage and access-checked.
-
-### Code Structure
-- Move direct SQL from handlers into domain stores/services.
-- Create a consistent validation layer (e.g., `validator` package per domain).
-- Add transactions for multi-step writes.
-
-### Frontend
-- Add role-based UI gating and route guards for privileged views.
-- Add error boundaries and centralized toast/errors for API errors.
-- Use a query/cache library (TanStack Query) for consistent data fetching.
-- Consider moving JWT storage to httpOnly cookies (with CSRF protection) or in-memory storage to reduce XSS exposure.
-
-### Testing & Tooling
-- Add API integration tests for auth + authorization.
-- Add security tests for BOLA and role enforcement.
-- Add dependency scanning (govulncheck, npm audit) in CI.
+- Expand rate limiting to cover imports and high-impact admin actions.
+- Introduce schema validation (Zod/validator) for payloads and enums.
+- Add distributed tracing export (OpenTelemetry) for production observability.
+- Add transactions for multi-step write workflows (payroll finalize).
+- Expand integration/E2E testing for remaining workflows.
 
 ## References (Best Practices)
 - OWASP API Security Top 10 (2023)

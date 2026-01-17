@@ -85,12 +85,12 @@ type PayrollPeriod struct {
 }
 
 type PayrollAdjustment struct {
-	ID          string    `json:"id"`
-	EmployeeID  string    `json:"employeeId"`
-	Description string    `json:"description"`
-	Amount      float64   `json:"amount"`
-	EffectiveDate string  `json:"effectiveDate,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID            string    `json:"id"`
+	EmployeeID    string    `json:"employeeId"`
+	Description   string    `json:"description"`
+	Amount        float64   `json:"amount"`
+	EffectiveDate string    `json:"effectiveDate,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 type payrollPeriodPayload struct {
@@ -398,12 +398,18 @@ func (h *Handler) handleListPeriods(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
+	page := shared.ParsePagination(r, 100, 500)
+	var total int
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&total); err != nil {
+		slog.Warn("payroll period count failed", "err", err)
+	}
 	rows, err := h.DB.Query(r.Context(), `
     SELECT id, schedule_id, start_date, end_date, status
     FROM payroll_periods
     WHERE tenant_id = $1
     ORDER BY start_date DESC
-  `, user.TenantID)
+    LIMIT $2 OFFSET $3
+  `, user.TenantID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_periods_failed", "failed to list periods", middleware.GetRequestID(r.Context()))
 		return
@@ -419,6 +425,7 @@ func (h *Handler) handleListPeriods(w http.ResponseWriter, r *http.Request) {
 		}
 		periods = append(periods, p)
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, periods, middleware.GetRequestID(r.Context()))
 }
 
@@ -488,11 +495,18 @@ func (h *Handler) handleListInputs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	periodID := chi.URLParam(r, "periodID")
+	page := shared.ParsePagination(r, 100, 500)
+	var total int
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_inputs WHERE tenant_id = $1 AND period_id = $2", user.TenantID, periodID).Scan(&total); err != nil {
+		slog.Warn("payroll inputs count failed", "err", err)
+	}
 	rows, err := h.DB.Query(r.Context(), `
     SELECT employee_id, element_id, units, rate, amount, source
     FROM payroll_inputs
     WHERE tenant_id = $1 AND period_id = $2
-  `, user.TenantID, periodID)
+    ORDER BY created_at DESC
+    LIMIT $3 OFFSET $4
+  `, user.TenantID, periodID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_inputs_failed", "failed to list inputs", middleware.GetRequestID(r.Context()))
 		return
@@ -508,6 +522,7 @@ func (h *Handler) handleListInputs(w http.ResponseWriter, r *http.Request) {
 		}
 		inputs = append(inputs, input)
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, inputs, middleware.GetRequestID(r.Context()))
 }
 
@@ -797,10 +812,14 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if jobID != "" {
-		detailsJSON, _ := json.Marshal(map[string]any{
+		detailsJSON, marshalErr := json.Marshal(map[string]any{
 			"processed": processed,
 			"periodId":  periodID,
 		})
+		if marshalErr != nil {
+			slog.Warn("payroll job details marshal failed", "err", marshalErr)
+			detailsJSON = []byte("{}")
+		}
 		if _, err := h.DB.Exec(r.Context(), `
       UPDATE job_runs SET status = $1, details_json = $2, completed_at = now()
       WHERE id = $3
@@ -944,13 +963,19 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	page := shared.ParsePagination(r, 100, 500)
+	var total int
+	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payslips WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&total); err != nil {
+		slog.Warn("payslip count failed", "err", err)
+	}
 	rows, err := h.DB.Query(r.Context(), `
     SELECT p.id, p.period_id, p.employee_id, r.gross, r.deductions, r.net, r.currency, p.file_url, p.created_at
     FROM payslips p
     JOIN payroll_results r ON p.period_id = r.period_id AND p.employee_id = r.employee_id
     WHERE p.tenant_id = $1 AND p.employee_id = $2
     ORDER BY p.created_at DESC
-  `, user.TenantID, employeeID)
+    LIMIT $3 OFFSET $4
+  `, user.TenantID, employeeID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payslip_list_failed", "failed to list payslips", middleware.GetRequestID(r.Context()))
 		return
@@ -979,6 +1004,7 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, slips, middleware.GetRequestID(r.Context()))
 }
 
@@ -1126,6 +1152,27 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 	}
 	query += " ORDER BY created_at DESC"
 
+	page := shared.ParsePagination(r, 100, 500)
+	countQuery := `
+    SELECT COUNT(1)
+    FROM payroll_adjustments
+    WHERE tenant_id = $1 AND period_id = $2
+  `
+	countArgs := []any{user.TenantID, periodID}
+	if user.RoleName == auth.RoleEmployee {
+		if len(args) == 3 {
+			countQuery += " AND employee_id = $3"
+			countArgs = append(countArgs, args[2])
+		}
+	}
+	var total int
+	if err := h.DB.QueryRow(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
+		slog.Warn("adjustments count failed", "err", err)
+	}
+
+	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, page.Limit, page.Offset)
+
 	rows, err := h.DB.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "adjustments_list_failed", "failed to list adjustments", middleware.GetRequestID(r.Context()))
@@ -1146,6 +1193,7 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 		}
 		adjustments = append(adjustments, adj)
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, adjustments, middleware.GetRequestID(r.Context()))
 }
 

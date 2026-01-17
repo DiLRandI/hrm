@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/smtp"
 	"strings"
@@ -75,7 +76,9 @@ func (s *smtpMailer) Send(ctx context.Context, from, to, subject, body string) e
 		return err
 	}
 	if _, err := w.Write(msg); err != nil {
-		_ = w.Close()
+		if cerr := w.Close(); cerr != nil {
+			slog.Warn("smtp data close failed", "err", cerr)
+		}
 		return err
 	}
 	if err := w.Close(); err != nil {

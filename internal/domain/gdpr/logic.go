@@ -1,10 +1,11 @@
 package gdpr
 
-func BuildDSARPayload(employee map[string]any, leaveRequests, payrollResults, goals []map[string]any) map[string]any {
-	return map[string]any{
-		"employee":       employee,
-		"leaveRequests":  leaveRequests,
-		"payrollResults": payrollResults,
-		"goals":          goals,
+import "maps"
+
+func BuildDSARPayload(employee, datasets map[string]any) map[string]any {
+	payload := map[string]any{
+		"employee": employee,
 	}
+	maps.Copy(payload, datasets)
+	return payload
 }

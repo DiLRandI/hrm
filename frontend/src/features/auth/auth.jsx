@@ -30,14 +30,23 @@ export function AuthProvider({ children }) {
     refresh();
   }, []);
 
-  const login = async (email, password) => {
-    const data = await api.post('/auth/login', { email, password });
+  const login = async (email, password, mfaCode) => {
+    const payload = { email, password };
+    if (mfaCode) {
+      payload.mfaCode = mfaCode;
+    }
+    const data = await api.post('/auth/login', payload);
     setToken(data.token);
     setUser(data.user);
     await refresh();
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout', {});
+    } catch {
+      // ignore logout errors
+    }
     setToken(null);
     setUser(null);
     setEmployee(null);
