@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,8 @@ import (
 	"hrm/internal/domain/auth"
 	"hrm/internal/domain/core"
 	"hrm/internal/domain/gdpr"
+	cryptoutil "hrm/internal/platform/crypto"
+	"hrm/internal/platform/jobs"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
@@ -27,10 +30,13 @@ import (
 type Handler struct {
 	DB    *pgxpool.Pool
 	Perms middleware.PermissionStore
+	Crypto *cryptoutil.Service
+	Jobs   *jobs.Service
+	Store  *core.Store
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
-	return &Handler{DB: db, Perms: perms}
+func NewHandler(db *pgxpool.Pool, store *core.Store, crypto *cryptoutil.Service, jobsSvc *jobs.Service) *Handler {
+	return &Handler{DB: db, Perms: store, Store: store, Crypto: crypto, Jobs: jobsSvc}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -39,12 +45,16 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Post("/retention-policies", h.handleCreateRetention)
 		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Get("/retention/runs", h.handleListRetentionRuns)
 		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Post("/retention/run", h.handleRunRetention)
+		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Get("/consents", h.handleListConsents)
+		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Post("/consents", h.handleCreateConsent)
+		r.With(middleware.RequirePermission(auth.PermGDPRRetention, h.Perms)).Post("/consents/{consentID}/revoke", h.handleRevokeConsent)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/dsar", h.handleListDSAR)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Post("/dsar", h.handleRequestDSAR)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/dsar/{exportID}/download", h.handleDownloadDSAR)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/anonymize", h.handleListAnonymizationJobs)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Post("/anonymize", h.handleRequestAnonymization)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Post("/anonymize/{jobID}/execute", h.handleExecuteAnonymization)
+		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/anonymize/{jobID}/download", h.handleDownloadAnonymizationReport)
 		r.With(middleware.RequirePermission(auth.PermGDPRExport, h.Perms)).Get("/access-logs", h.handleAccessLogs)
 	})
 }
@@ -72,6 +82,14 @@ type anonymizationJob struct {
 	Reason      string    `json:"reason"`
 	RequestedAt time.Time `json:"requestedAt"`
 	CompletedAt any       `json:"completedAt"`
+}
+
+type consentRecord struct {
+	ID          string `json:"id"`
+	EmployeeID  string `json:"employeeId"`
+	ConsentType string `json:"consentType"`
+	GrantedAt   any    `json:"grantedAt"`
+	RevokedAt   any    `json:"revokedAt"`
 }
 
 func (h *Handler) handleListRetention(w http.ResponseWriter, r *http.Request) {
@@ -224,10 +242,35 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
 		}
 
 		cutoff := time.Now().AddDate(0, 0, -retentionDays)
-		deleted, err := h.applyRetention(r.Context(), user.TenantID, category, cutoff)
+		runID := ""
+		if h.Jobs != nil {
+			if err := h.DB.QueryRow(r.Context(), `
+        INSERT INTO job_runs (tenant_id, job_type, status)
+        VALUES ($1,$2,$3)
+        RETURNING id
+      `, user.TenantID, jobs.JobRetention, "running").Scan(&runID); err != nil {
+				slog.Warn("retention job run insert failed", "err", err)
+			}
+		}
+
+		deleted, err := gdpr.ApplyRetention(r.Context(), h.DB, user.TenantID, category, cutoff)
 		status := "completed"
 		if err != nil {
 			status = "failed"
+		}
+
+		if runID != "" {
+			detailsJSON, _ := json.Marshal(map[string]any{
+				"dataCategory": category,
+				"cutoffDate":   cutoff,
+				"deleted":      deleted,
+			})
+			if _, updErr := h.DB.Exec(r.Context(), `
+        UPDATE job_runs SET status = $1, details_json = $2, completed_at = now()
+        WHERE id = $3
+      `, status, detailsJSON, runID); updErr != nil {
+				slog.Warn("retention job run update failed", "err", updErr)
+			}
 		}
 
 		var runID string
@@ -251,6 +294,107 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("audit gdpr.retention.run failed", "err", err)
 	}
 	api.Success(w, summaries, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleListConsents(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	employeeID := r.URL.Query().Get("employeeId")
+	query := `
+    SELECT id, employee_id, consent_type, granted_at, revoked_at
+    FROM consent_records
+    WHERE tenant_id = $1
+  `
+	args := []any{user.TenantID}
+	if employeeID != "" {
+		query += " AND employee_id = $2"
+		args = append(args, employeeID)
+	}
+	query += " ORDER BY granted_at DESC"
+
+	rows, err := h.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "consent_list_failed", "failed to list consents", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	var records []consentRecord
+	for rows.Next() {
+		var rec consentRecord
+		if err := rows.Scan(&rec.ID, &rec.EmployeeID, &rec.ConsentType, &rec.GrantedAt, &rec.RevokedAt); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "consent_list_failed", "failed to list consents", middleware.GetRequestID(r.Context()))
+			return
+		}
+		records = append(records, rec)
+	}
+	api.Success(w, records, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleCreateConsent(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var payload struct {
+		EmployeeID  string `json:"employeeId"`
+		ConsentType string `json:"consentType"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if payload.EmployeeID == "" || payload.ConsentType == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id and consent type required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var id string
+	if err := h.DB.QueryRow(r.Context(), `
+    INSERT INTO consent_records (tenant_id, employee_id, consent_type)
+    VALUES ($1,$2,$3)
+    RETURNING id
+  `, user.TenantID, payload.EmployeeID, payload.ConsentType).Scan(&id); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "consent_create_failed", "failed to create consent", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.consent.create", "consent_record", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+		slog.Warn("audit gdpr.consent.create failed", "err", err)
+	}
+	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleRevokeConsent(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	consentID := chi.URLParam(r, "consentID")
+	if _, err := h.DB.Exec(r.Context(), `
+    UPDATE consent_records SET revoked_at = now()
+    WHERE tenant_id = $1 AND id = $2
+  `, user.TenantID, consentID); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "consent_revoke_failed", "failed to revoke consent", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "gdpr.consent.revoke", "consent_record", consentID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
+		slog.Warn("audit gdpr.consent.revoke failed", "err", err)
+	}
+	api.Success(w, map[string]string{"status": "revoked"}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleListDSAR(w http.ResponseWriter, r *http.Request) {

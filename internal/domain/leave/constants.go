@@ -1,8 +1,9 @@
 package leave
 
 const (
-	StatusPending   = "pending"
-	StatusApproved  = "approved"
-	StatusRejected  = "rejected"
-	StatusCancelled = "cancelled"
+	StatusPending    = "pending"
+	StatusPendingHR  = "pending_hr"
+	StatusApproved   = "approved"
+	StatusRejected   = "rejected"
+	StatusCancelled  = "cancelled"
 )

@@ -16,18 +16,21 @@ import (
 	"hrm/internal/domain/auth"
 	"hrm/internal/domain/leave"
 	"hrm/internal/domain/notifications"
+	"hrm/internal/platform/jobs"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
-	DB    *pgxpool.Pool
-	Perms middleware.PermissionStore
+	DB     *pgxpool.Pool
+	Perms  middleware.PermissionStore
+	Notify *notifications.Service
+	Jobs   *jobs.Service
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
-	return &Handler{DB: db, Perms: perms}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore, notify *notifications.Service, jobsSvc *jobs.Service) *Handler {
+	return &Handler{DB: db, Perms: perms, Notify: notify, Jobs: jobsSvc}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -125,7 +128,7 @@ func (h *Handler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.DB.Query(r.Context(), `
-    SELECT id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit, allow_negative
+    SELECT id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit, allow_negative, requires_hr_approval
     FROM leave_policies
     WHERE tenant_id = $1
   `, user.TenantID)
@@ -138,7 +141,7 @@ func (h *Handler) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	var policies []leave.LeavePolicy
 	for rows.Next() {
 		var p leave.LeavePolicy
-		if err := rows.Scan(&p.ID, &p.LeaveTypeID, &p.AccrualRate, &p.AccrualPeriod, &p.Entitlement, &p.CarryOver, &p.AllowNegative); err != nil {
+		if err := rows.Scan(&p.ID, &p.LeaveTypeID, &p.AccrualRate, &p.AccrualPeriod, &p.Entitlement, &p.CarryOver, &p.AllowNegative, &p.RequiresHRApproval); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "leave_policies_failed", "failed to list leave policies", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -166,10 +169,10 @@ func (h *Handler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	var id string
 	err := h.DB.QueryRow(r.Context(), `
-    INSERT INTO leave_policies (tenant_id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit, allow_negative)
-    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    INSERT INTO leave_policies (tenant_id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit, allow_negative, requires_hr_approval)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
     RETURNING id
-  `, user.TenantID, payload.LeaveTypeID, payload.AccrualRate, payload.AccrualPeriod, payload.Entitlement, payload.CarryOver, payload.AllowNegative).Scan(&id)
+  `, user.TenantID, payload.LeaveTypeID, payload.AccrualRate, payload.AccrualPeriod, payload.Entitlement, payload.CarryOver, payload.AllowNegative, payload.RequiresHRApproval).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "leave_policy_create_failed", "failed to create leave policy", middleware.GetRequestID(r.Context()))
 		return
@@ -577,8 +580,10 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("leave request manager lookup failed", "err", err)
 	}
 	if managerUserID != "" {
-		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, managerUserID, notifications.TypeLeaveSubmitted, "Leave request submitted", "A leave request is awaiting approval."); err != nil {
-			slog.Warn("leave submitted notification failed", "err", err)
+		if h.Notify != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, managerUserID, notifications.TypeLeaveSubmitted, "Leave request submitted", "A leave request is awaiting approval."); err != nil {
+				slog.Warn("leave submitted notification failed", "err", err)
+			}
 		}
 	}
 
@@ -638,8 +643,10 @@ func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {
 	if employeeUserID != "" {
 		title := "Leave approved"
 		body := fmt.Sprintf("Your %s leave request was approved.", leaveTypeName)
-		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveApproved, title, body); err != nil {
-			slog.Warn("leave approved notification failed", "err", err)
+		if h.Notify != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveApproved, title, body); err != nil {
+				slog.Warn("leave approved notification failed", "err", err)
+			}
 		}
 	}
 
@@ -699,8 +706,10 @@ func (h *Handler) handleRejectRequest(w http.ResponseWriter, r *http.Request) {
 	if employeeUserID != "" {
 		title := "Leave rejected"
 		body := fmt.Sprintf("Your %s leave request was rejected.", leaveTypeName)
-		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveRejected, title, body); err != nil {
-			slog.Warn("leave rejected notification failed", "err", err)
+		if h.Notify != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveRejected, title, body); err != nil {
+				slog.Warn("leave rejected notification failed", "err", err)
+			}
 		}
 	}
 
@@ -762,8 +771,10 @@ func (h *Handler) handleCancelRequest(w http.ResponseWriter, r *http.Request) {
 	if employeeUserID != "" {
 		title := "Leave cancelled"
 		body := fmt.Sprintf("Your %s leave request was cancelled.", leaveTypeName)
-		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveCancelled, title, body); err != nil {
-			slog.Warn("leave cancelled notification failed", "err", err)
+		if h.Notify != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeLeaveCancelled, title, body); err != nil {
+				slog.Warn("leave cancelled notification failed", "err", err)
+			}
 		}
 	}
 

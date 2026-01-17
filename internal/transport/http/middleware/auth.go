@@ -39,7 +39,10 @@ func Auth(secret string, pool *pgxpool.Pool) func(http.Handler) http.Handler {
 				err := pool.QueryRow(r.Context(), `
           SELECT COUNT(1)
           FROM sessions
-          WHERE user_id = $1 AND refresh_token = $2 AND expires_at > now()
+          WHERE user_id = $1
+            AND refresh_token = $2
+            AND expires_at > now()
+            AND revoked_at IS NULL
         `, claims.UserID, auth.HashToken(claims.SessionID)).Scan(&count)
 				if err != nil || count == 0 {
 					next.ServeHTTP(w, r)

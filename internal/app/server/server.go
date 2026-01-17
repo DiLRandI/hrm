@@ -12,8 +12,12 @@ import (
 
 	"hrm/internal/domain/core"
 	"hrm/internal/domain/notifications"
+	cryptoutil "hrm/internal/platform/crypto"
 	"hrm/internal/platform/config"
 	"hrm/internal/platform/db"
+	"hrm/internal/platform/email"
+	"hrm/internal/platform/jobs"
+	"hrm/internal/platform/metrics"
 	authhandler "hrm/internal/transport/http/handlers/auth"
 	corehandler "hrm/internal/transport/http/handlers/core"
 	gdprhandler "hrm/internal/transport/http/handlers/gdpr"
@@ -23,12 +27,16 @@ import (
 	performancehandler "hrm/internal/transport/http/handlers/performance"
 	reportshandler "hrm/internal/transport/http/handlers/reports"
 	"hrm/internal/transport/http/middleware"
+	"hrm/internal/transport/http/api"
 )
 
 type App struct {
 	Config config.Config
 	DB     *db.Pool
 	Router http.Handler
+	Stop   context.CancelFunc
+	Jobs   *jobs.Service
+	Metrics *metrics.Collector
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
@@ -51,13 +59,26 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 		}
 	}
 
-	coreStore := core.NewStore(pool)
-	router := buildRouter(cfg, pool, coreStore)
+	cryptoSvc, err := cryptoutil.New(cfg.DataEncryptionKey)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+
+	coreStore := core.NewStore(pool, cryptoSvc)
+	mailer := email.New(cfg)
+	notifySvc := notifications.New(pool, mailer)
+	notifySvc.DefaultFrom = cfg.EmailFrom
+	jobsSvc := jobs.New(pool, cfg)
+	metricsCollector := metrics.New()
+	router := buildRouter(cfg, pool, coreStore, cryptoSvc, notifySvc, jobsSvc, metricsCollector)
 
 	return &App{
 		Config: cfg,
 		DB:     pool,
 		Router: router,
+		Jobs:   jobsSvc,
+		Metrics: metricsCollector,
 	}, nil
 }
 
@@ -67,7 +88,7 @@ func (a *App) Close() {
 	}
 }
 
-func (a *App) Run() error {
+func (a *App) Run(ctx context.Context) error {
 	srv := &http.Server{
 		Addr:              a.Config.Addr,
 		Handler:           a.Router,
@@ -77,13 +98,35 @@ func (a *App) Run() error {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
-	return srv.ListenAndServe()
+	if a.Jobs != nil {
+		a.Jobs.Start(ctx)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return nil
+	case err := <-errCh:
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	}
 }
 
-func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.Handler {
+func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, cryptoSvc *cryptoutil.Service, notifySvc *notifications.Service, jobsSvc *jobs.Service, metricsCollector *metrics.Collector) http.Handler {
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
-	router.Use(middleware.Logger)
+	router.Use(middleware.Logger(metricsCollector))
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.SecureHeaders(cfg.Environment == "production"))
 	router.Use(middleware.Auth(cfg.JWTSecret, pool))
@@ -108,33 +151,44 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store) http.H
 		}
 	})
 
+	if cfg.MetricsEnabled {
+		router.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			api.Success(w, metricsCollector.Snapshot(), middleware.GetRequestID(r.Context()))
+		})
+	}
+
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
-		authHandler := authhandler.NewHandler(pool, cfg.JWTSecret)
+		authHandler := authhandler.NewHandler(pool, cfg.JWTSecret, cryptoSvc)
 		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/login", authHandler.HandleLogin)
 		r.Post("/auth/logout", authHandler.HandleLogout)
+		r.Post("/auth/refresh", authHandler.HandleRefresh)
 		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/request-reset", authHandler.HandleRequestReset)
 		r.Post("/auth/reset", authHandler.HandleResetPassword)
+		r.Post("/auth/mfa/setup", authHandler.HandleMFASetup)
+		r.Post("/auth/mfa/enable", authHandler.HandleMFAEnable)
+		r.Post("/auth/mfa/disable", authHandler.HandleMFADisable)
 
 		coreHandler := corehandler.NewHandler(coreStore)
 		coreHandler.RegisterRoutes(r)
 
-		leaveHandler := leavehandler.NewHandler(pool, coreStore)
+		leaveHandler := leavehandler.NewHandler(pool, coreStore, notifySvc, jobsSvc)
 		leaveHandler.RegisterRoutes(r)
 
-		payrollHandler := payrollhandler.NewHandler(pool, coreStore)
+		payrollHandler := payrollhandler.NewHandler(pool, coreStore, cryptoSvc, notifySvc, jobsSvc)
 		payrollHandler.RegisterRoutes(r)
 
-		performanceHandler := performancehandler.NewHandler(pool, coreStore)
+		performanceHandler := performancehandler.NewHandler(pool, coreStore, notifySvc)
 		performanceHandler.RegisterRoutes(r)
 
-		gdprHandler := gdprhandler.NewHandler(pool, coreStore)
+		gdprHandler := gdprhandler.NewHandler(pool, coreStore, cryptoSvc, jobsSvc)
 		gdprHandler.RegisterRoutes(r)
 
 		reportsHandler := reportshandler.NewHandler(pool, coreStore)
 		reportsHandler.RegisterRoutes(r)
 
-		notificationsHandler := notificationshandler.NewHandler(notifications.New(pool))
+		notificationsHandler := notificationshandler.NewHandler(notifySvc)
 		notificationsHandler.RegisterRoutes(r)
 	})
 

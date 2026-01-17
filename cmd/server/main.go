@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"hrm/internal/app/server"
 	"hrm/internal/platform/config"
@@ -17,7 +19,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	app, err := server.New(ctx, cfg)
 	if err != nil {
 		slog.Error("startup failed", "err", err)
@@ -26,7 +30,7 @@ func main() {
 	defer app.Close()
 
 	slog.Info("server listening", "addr", cfg.Addr)
-	if err := app.Run(); err != nil {
+	if err := app.Run(ctx); err != nil {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)
 	}

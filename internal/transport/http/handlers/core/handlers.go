@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -27,18 +28,25 @@ func NewHandler(store *core.Store) *Handler {
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/me", h.handleMe)
+	r.Get("/org/chart", h.handleOrgChart)
 	r.Route("/employees", func(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Store)).Get("/", h.handleListEmployees)
 		r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Store)).Post("/", h.handleCreateEmployee)
 		r.Route("/{employeeID}", func(r chi.Router) {
 			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Store)).Get("/", h.handleGetEmployee)
 			r.Put("/", h.handleUpdateEmployee)
+			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Store)).Get("/manager-history", h.handleManagerHistory)
 		})
 	})
 	r.Route("/departments", func(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermOrgRead, h.Store)).Get("/", h.handleListDepartments)
 		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Store)).Post("/", h.handleCreateDepartment)
+		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Store)).Put("/{departmentID}", h.handleUpdateDepartment)
+		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Store)).Delete("/{departmentID}", h.handleDeleteDepartment)
 	})
+	r.With(middleware.RequirePermission(auth.PermOrgRead, h.Store)).Get("/permissions", h.handleListPermissions)
+	r.With(middleware.RequirePermission(auth.PermOrgRead, h.Store)).Get("/roles", h.handleListRoles)
+	r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Store)).Put("/roles/{roleID}", h.handleUpdateRolePermissions)
 }
 
 func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +115,18 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, emp)
 	}
 
-	api.Success(w, filtered, middleware.GetRequestID(r.Context()))
+	page := shared.ParsePagination(r, 100, 500)
+	total := len(filtered)
+	start := page.Offset
+	if start > total {
+		start = total
+	}
+	end := start + page.Limit
+	if end > total {
+		end = total
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	api.Success(w, filtered[start:end], middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +253,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		payload.EmploymentType = existing.EmploymentType
 		payload.DepartmentID = existing.DepartmentID
 		payload.ManagerID = existing.ManagerID
+		payload.PayGroupID = existing.PayGroupID
 		payload.StartDate = existing.StartDate
 		payload.EndDate = existing.EndDate
 		payload.Status = existing.Status
@@ -280,12 +300,20 @@ func (h *Handler) handleListDepartments(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	page := shared.ParsePagination(r, 100, 500)
+
+	var total int
+	if err := h.Store.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM departments WHERE tenant_id = $1", user.TenantID).Scan(&total); err != nil {
+		slog.Warn("department count failed", "err", err)
+	}
+
 	rows, err := h.Store.DB.Query(r.Context(), `
     SELECT id, name, parent_id, manager_id, created_at
     FROM departments
     WHERE tenant_id = $1
     ORDER BY name
-  `, user.TenantID)
+    LIMIT $2 OFFSET $3
+  `, user.TenantID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "department_list_failed", "failed to list departments", middleware.GetRequestID(r.Context()))
 		return
@@ -302,6 +330,7 @@ func (h *Handler) handleListDepartments(w http.ResponseWriter, r *http.Request) 
 		departments = append(departments, dep)
 	}
 
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, departments, middleware.GetRequestID(r.Context()))
 }
 
@@ -334,6 +363,279 @@ func (h *Handler) handleCreateDepartment(w http.ResponseWriter, r *http.Request)
 	}
 
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleUpdateDepartment(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	departmentID := chi.URLParam(r, "departmentID")
+	var payload core.Department
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if payload.Name == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "name is required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	cmd, err := h.Store.DB.Exec(r.Context(), `
+    UPDATE departments
+    SET name = $1, parent_id = $2, manager_id = $3
+    WHERE tenant_id = $4 AND id = $5
+  `, payload.Name, nullIfEmpty(payload.ParentID), nullIfEmpty(payload.ManagerID), user.TenantID, departmentID)
+	if err != nil || cmd.RowsAffected() == 0 {
+		api.Fail(w, http.StatusInternalServerError, "department_update_failed", "failed to update department", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, map[string]string{"id": departmentID}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleDeleteDepartment(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	departmentID := chi.URLParam(r, "departmentID")
+	var dependent int
+	if err := h.Store.DB.QueryRow(r.Context(), `
+    SELECT COUNT(1) FROM employees WHERE tenant_id = $1 AND department_id = $2
+  `, user.TenantID, departmentID).Scan(&dependent); err == nil && dependent > 0 {
+		api.Fail(w, http.StatusBadRequest, "department_in_use", "department has assigned employees", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if _, err := h.Store.DB.Exec(r.Context(), `
+    DELETE FROM departments WHERE tenant_id = $1 AND id = $2
+  `, user.TenantID, departmentID); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "department_delete_failed", "failed to delete department", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, map[string]string{"status": "deleted"}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleOrgChart(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	query := `
+    SELECT id, first_name, last_name, COALESCE(manager_id::text,''), COALESCE(department_id::text,'')
+    FROM employees
+    WHERE tenant_id = $1`
+	args := []any{user.TenantID}
+	if user.RoleName == auth.RoleEmployee || user.RoleName == auth.RoleManager {
+		var employeeID string
+		if err := h.Store.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err == nil && employeeID != "" {
+			query += " AND (id = $2 OR manager_id = $2)"
+			args = append(args, employeeID)
+		}
+	}
+	query += " ORDER BY last_name, first_name"
+
+	rows, err := h.Store.DB.Query(r.Context(), query, args...)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "org_chart_failed", "failed to load org chart", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	var nodes []map[string]any
+	for rows.Next() {
+		var id, first, last, managerID, departmentID string
+		if err := rows.Scan(&id, &first, &last, &managerID, &departmentID); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "org_chart_failed", "failed to load org chart", middleware.GetRequestID(r.Context()))
+			return
+		}
+		nodes = append(nodes, map[string]any{
+			"id":           id,
+			"name":         first + " " + last,
+			"managerId":    managerID,
+			"departmentId": departmentID,
+		})
+	}
+	api.Success(w, nodes, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleManagerHistory(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	employeeID := chi.URLParam(r, "employeeID")
+	rows, err := h.Store.DB.Query(r.Context(), `
+    SELECT mr.manager_id, COALESCE(m.first_name,''), COALESCE(m.last_name,''), mr.start_date, mr.end_date
+    FROM manager_relations mr
+    LEFT JOIN employees m ON mr.manager_id = m.id
+    WHERE mr.employee_id = $1
+    ORDER BY mr.start_date DESC
+  `, employeeID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "manager_history_failed", "failed to load manager history", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+	var history []map[string]any
+	for rows.Next() {
+		var managerID, first, last string
+		var startDate, endDate any
+		if err := rows.Scan(&managerID, &first, &last, &startDate, &endDate); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "manager_history_failed", "failed to load manager history", middleware.GetRequestID(r.Context()))
+			return
+		}
+		history = append(history, map[string]any{
+			"managerId": managerID,
+			"name":      first + " " + last,
+			"startDate": startDate,
+			"endDate":   endDate,
+		})
+	}
+	api.Success(w, history, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleListPermissions(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.Store.DB.Query(r.Context(), `
+    SELECT key, COALESCE(description,'')
+    FROM permissions
+    ORDER BY key
+  `)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "permission_list_failed", "failed to list permissions", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	var out []map[string]string
+	for rows.Next() {
+		var key, desc string
+		if err := rows.Scan(&key, &desc); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "permission_list_failed", "failed to list permissions", middleware.GetRequestID(r.Context()))
+			return
+		}
+		out = append(out, map[string]string{"key": key, "description": desc})
+	}
+	api.Success(w, out, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	rows, err := h.Store.DB.Query(r.Context(), `
+    SELECT r.id,
+           r.name,
+           COALESCE(array_agg(p.key) FILTER (WHERE p.key IS NOT NULL), '{}') AS permissions
+    FROM roles r
+    LEFT JOIN role_permissions rp ON rp.role_id = r.id
+    LEFT JOIN permissions p ON rp.permission_id = p.id
+    WHERE r.tenant_id = $1
+    GROUP BY r.id
+    ORDER BY r.name
+  `, user.TenantID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "role_list_failed", "failed to list roles", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	var roles []map[string]any
+	for rows.Next() {
+		var id, name string
+		var perms []string
+		if err := rows.Scan(&id, &name, &perms); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "role_list_failed", "failed to list roles", middleware.GetRequestID(r.Context()))
+			return
+		}
+		roles = append(roles, map[string]any{"id": id, "name": name, "permissions": perms})
+	}
+	api.Success(w, roles, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleUpdateRolePermissions(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleSystemAdmin {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr or system admin required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	roleID := chi.URLParam(r, "roleID")
+	var payload struct {
+		Permissions []string `json:"permissions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	tx, err := h.Store.DB.Begin(r.Context())
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "role_update_failed", "failed to update role", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	if _, err := tx.Exec(r.Context(), "DELETE FROM role_permissions WHERE role_id = $1", roleID); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "role_update_failed", "failed to update role", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if len(payload.Permissions) > 0 {
+		rows, err := tx.Query(r.Context(), `
+      SELECT id, key FROM permissions WHERE key = ANY($1)
+    `, payload.Permissions)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "role_update_failed", "failed to update role", middleware.GetRequestID(r.Context()))
+			return
+		}
+		var permissionIDs []string
+		for rows.Next() {
+			var id, key string
+			if err := rows.Scan(&id, &key); err != nil {
+				rows.Close()
+				api.Fail(w, http.StatusInternalServerError, "role_update_failed", "failed to update role", middleware.GetRequestID(r.Context()))
+				return
+			}
+			permissionIDs = append(permissionIDs, id)
+		}
+		rows.Close()
+		for _, permID := range permissionIDs {
+			if _, err := tx.Exec(r.Context(), "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2)", roleID, permID); err != nil {
+				api.Fail(w, http.StatusInternalServerError, "role_update_failed", "failed to update role", middleware.GetRequestID(r.Context()))
+				return
+			}
+		}
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "role_update_failed", "failed to update role", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	api.Success(w, map[string]string{"status": "updated"}, middleware.GetRequestID(r.Context()))
 }
 
 func nullIfEmpty(value string) any {

@@ -21,12 +21,13 @@ import (
 )
 
 type Handler struct {
-	DB    *pgxpool.Pool
-	Perms middleware.PermissionStore
+	DB     *pgxpool.Pool
+	Perms  middleware.PermissionStore
+	Notify *notifications.Service
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
-	return &Handler{DB: db, Perms: perms}
+func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore, notify *notifications.Service) *Handler {
+	return &Handler{DB: db, Perms: perms, Notify: notify}
 }
 
 type reviewTemplate struct {
@@ -174,25 +175,24 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.goal.create", "goal", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.goal.create failed", "err", err)
 	}
-	notify := notifications.New(h.DB)
-	if payload.EmployeeID != "" {
+	if h.Notify != nil && payload.EmployeeID != "" {
 		var employeeUserID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.EmployeeID).Scan(&employeeUserID); err != nil {
 			slog.Warn("goal create employee user lookup failed", "err", err)
 		}
 		if employeeUserID != "" {
-			if err := notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeGoalCreated, "Goal created", "A new goal has been added to your plan."); err != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeGoalCreated, "Goal created", "A new goal has been added to your plan."); err != nil {
 				slog.Warn("goal created notification failed", "err", err)
 			}
 		}
 	}
-	if payload.ManagerID != "" {
+	if h.Notify != nil && payload.ManagerID != "" {
 		var managerUserID string
 		if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.ManagerID).Scan(&managerUserID); err != nil {
 			slog.Warn("goal create manager user lookup failed", "err", err)
 		}
 		if managerUserID != "" {
-			if err := notify.Create(r.Context(), user.TenantID, managerUserID, notifications.TypeGoalCreated, "Goal created", "A goal has been created for your report."); err != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, managerUserID, notifications.TypeGoalCreated, "Goal created", "A goal has been created for your report."); err != nil {
 				slog.Warn("goal created manager notification failed", "err", err)
 			}
 		}
@@ -431,7 +431,7 @@ func (h *Handler) handleListReviewCycles(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	rows, err := h.DB.Query(r.Context(), `
-    SELECT id, name, start_date, end_date, status, COALESCE(template_id, '')
+    SELECT id, name, start_date, end_date, status, COALESCE(template_id, ''), hr_required
     FROM review_cycles
     WHERE tenant_id = $1
     ORDER BY start_date DESC
@@ -445,7 +445,7 @@ func (h *Handler) handleListReviewCycles(w http.ResponseWriter, r *http.Request)
 	var cycles []performance.ReviewCycle
 	for rows.Next() {
 		var c performance.ReviewCycle
-		if err := rows.Scan(&c.ID, &c.Name, &c.StartDate, &c.EndDate, &c.Status, &c.TemplateID); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.StartDate, &c.EndDate, &c.Status, &c.TemplateID, &c.HRRequired); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "review_cycle_failed", "failed to list review cycles", middleware.GetRequestID(r.Context()))
 			return
 		}
@@ -472,6 +472,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 		Status      string   `json:"status"`
 		TemplateID  string   `json:"templateId"`
 		EmployeeIDs []string `json:"employeeIds"`
+		HRRequired  bool     `json:"hrRequired"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
@@ -494,10 +495,10 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 
 	var id string
 	if err := h.DB.QueryRow(r.Context(), `
-    INSERT INTO review_cycles (tenant_id, name, start_date, end_date, status, template_id)
-    VALUES ($1,$2,$3,$4,$5,$6)
+    INSERT INTO review_cycles (tenant_id, name, start_date, end_date, status, template_id, hr_required)
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
     RETURNING id
-  `, user.TenantID, payload.Name, startDate, endDate, payload.Status, nullIfEmpty(payload.TemplateID)).Scan(&id); err != nil {
+  `, user.TenantID, payload.Name, startDate, endDate, payload.Status, nullIfEmpty(payload.TemplateID), payload.HRRequired).Scan(&id); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "review_cycle_create_failed", "failed to create review cycle", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -517,7 +518,6 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 	rows, err := h.DB.Query(r.Context(), employeesQuery, args...)
 	if err == nil {
 		defer rows.Close()
-		notify := notifications.New(h.DB)
 		for rows.Next() {
 			var employeeID, managerID, employeeUserID string
 			if err := rows.Scan(&employeeID, &managerID, &employeeUserID); err != nil {
@@ -525,14 +525,14 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 				continue
 			}
 			if _, err := h.DB.Exec(r.Context(), `
-        INSERT INTO review_tasks (tenant_id, cycle_id, employee_id, manager_id, self_due, manager_due, hr_due)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-      `, user.TenantID, id, employeeID, nullIfEmpty(managerID), midpoint, endDate, endDate); err != nil {
+        INSERT INTO review_tasks (tenant_id, cycle_id, employee_id, manager_id, status, self_due, manager_due, hr_due)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `, user.TenantID, id, employeeID, nullIfEmpty(managerID), performance.ReviewTaskStatusSelfPending, midpoint, endDate, endDate); err != nil {
 				slog.Warn("review task insert failed", "err", err)
 			}
 
-			if employeeUserID != "" {
-				if err := notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeReviewAssigned, "Review assigned", "Your self-review is ready to complete."); err != nil {
+			if h.Notify != nil && employeeUserID != "" {
+				if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypeReviewAssigned, "Review assigned", "Your self-review is ready to complete."); err != nil {
 					slog.Warn("review assigned notification failed", "err", err)
 				}
 			}
@@ -541,8 +541,8 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 				if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, managerID).Scan(&managerUserID); err != nil {
 					slog.Warn("review cycle manager user lookup failed", "err", err)
 				}
-				if managerUserID != "" {
-					if err := notify.Create(r.Context(), user.TenantID, managerUserID, notifications.TypeReviewAssigned, "Manager review assigned", "A manager review has been assigned to you."); err != nil {
+				if h.Notify != nil && managerUserID != "" {
+					if err := h.Notify.Create(r.Context(), user.TenantID, managerUserID, notifications.TypeReviewAssigned, "Manager review assigned", "A manager review has been assigned to you."); err != nil {
 						slog.Warn("manager review assigned notification failed", "err", err)
 					}
 				}
@@ -673,12 +673,14 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 	}
 
 	taskID := chi.URLParam(r, "taskID")
-	var taskEmployeeID, taskManagerID string
+	var taskEmployeeID, taskManagerID, taskStatus, templateID string
+	var hrRequired bool
 	if err := h.DB.QueryRow(r.Context(), `
-    SELECT employee_id, manager_id
-    FROM review_tasks
-    WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, taskID).Scan(&taskEmployeeID, &taskManagerID); err != nil {
+    SELECT rt.employee_id, rt.manager_id, rt.status, COALESCE(rc.template_id::text,''), rc.hr_required
+    FROM review_tasks rt
+    JOIN review_cycles rc ON rt.cycle_id = rc.id
+    WHERE rt.tenant_id = $1 AND rt.id = $2
+  `, user.TenantID, taskID).Scan(&taskEmployeeID, &taskManagerID, &taskStatus, &templateID, &hrRequired); err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "review task not found", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -692,6 +694,10 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 			return
 		}
+		if taskStatus != performance.ReviewTaskStatusSelfPending {
+			api.Fail(w, http.StatusBadRequest, "invalid_state", "self review not available", middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
@@ -700,6 +706,16 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 		}
 		if managerEmployeeID == "" || managerEmployeeID != taskManagerID {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if taskStatus != performance.ReviewTaskStatusManagerPending {
+			api.Fail(w, http.StatusBadRequest, "invalid_state", "manager review not available", middleware.GetRequestID(r.Context()))
+			return
+		}
+	}
+	if user.RoleName == auth.RoleHR {
+		if taskStatus != performance.ReviewTaskStatusHRPending {
+			api.Fail(w, http.StatusBadRequest, "invalid_state", "hr review not available", middleware.GetRequestID(r.Context()))
 			return
 		}
 	}
@@ -714,6 +730,22 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid responses payload", middleware.GetRequestID(r.Context()))
 		return
+	}
+
+	if templateID != "" {
+		var questionsJSON []byte
+		if err := h.DB.QueryRow(r.Context(), `
+      SELECT questions_json FROM review_templates WHERE tenant_id = $1 AND id = $2
+    `, user.TenantID, templateID).Scan(&questionsJSON); err == nil {
+			var questions []any
+			if err := json.Unmarshal(questionsJSON, &questions); err == nil && len(questions) > 0 {
+				var responsesArr []any
+				if err := json.Unmarshal(responses, &responsesArr); err != nil || len(responsesArr) < len(questions) {
+					api.Fail(w, http.StatusBadRequest, "invalid_payload", "responses do not match template", middleware.GetRequestID(r.Context()))
+					return
+				}
+			}
+		}
 	}
 	rating, ok := payload["rating"].(float64)
 	if !ok && payload["rating"] != nil {
@@ -742,12 +774,16 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	status := performance.ReviewTaskStatusSubmitted
+	status := performance.ReviewTaskStatusCompleted
 	switch role {
 	case "self":
-		status = performance.ReviewTaskStatusSelfCompleted
+		if hrRequired || taskManagerID != "" {
+			status = performance.ReviewTaskStatusManagerPending
+		}
 	case "manager":
-		status = performance.ReviewTaskStatusManagerCompleted
+		if hrRequired {
+			status = performance.ReviewTaskStatusHRPending
+		}
 	case "hr":
 		status = performance.ReviewTaskStatusCompleted
 	}
@@ -885,8 +921,10 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("feedback recipient user lookup failed", "err", err)
 	}
 	if toUserID != "" {
-		if err := notifications.New(h.DB).Create(r.Context(), user.TenantID, toUserID, notifications.TypeFeedbackReceived, "New feedback", "You have received new feedback."); err != nil {
-			slog.Warn("feedback notification failed", "err", err)
+		if h.Notify != nil {
+			if err := h.Notify.Create(r.Context(), user.TenantID, toUserID, notifications.TypeFeedbackReceived, "New feedback", "You have received new feedback."); err != nil {
+				slog.Warn("feedback notification failed", "err", err)
+			}
 		}
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.feedback.create", "feedback", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
@@ -1317,12 +1355,12 @@ func (h *Handler) handlePerformanceSummary(w http.ResponseWriter, r *http.Reques
 		taskArgs = append(taskArgs, managerEmployeeID)
 	}
 	statusStart := len(taskArgs) + 1
-	taskArgs = append(taskArgs, performance.ReviewTaskStatusSelfCompleted, performance.ReviewTaskStatusManagerCompleted, performance.ReviewTaskStatusCompleted)
+	taskArgs = append(taskArgs, performance.ReviewTaskStatusCompleted)
 	taskQuery := fmt.Sprintf(`
     SELECT COUNT(1),
-           COALESCE(SUM(CASE WHEN status IN ($%d,$%d,$%d) THEN 1 ELSE 0 END),0)
+           COALESCE(SUM(CASE WHEN status = $%d THEN 1 ELSE 0 END),0)
     FROM review_tasks
-    WHERE tenant_id = $1%s`, statusStart, statusStart+1, statusStart+2, taskFilter)
+    WHERE tenant_id = $1%s`, statusStart, taskFilter)
 
 	var tasksTotal, tasksCompleted int
 	if err := h.DB.QueryRow(r.Context(), taskQuery, taskArgs...).Scan(&tasksTotal, &tasksCompleted); err != nil {

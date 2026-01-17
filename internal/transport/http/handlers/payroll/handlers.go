@@ -26,18 +26,24 @@ import (
 	"hrm/internal/domain/leave"
 	"hrm/internal/domain/notifications"
 	"hrm/internal/domain/payroll"
+	cryptoutil "hrm/internal/platform/crypto"
+	"hrm/internal/platform/jobs"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
 	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
-	DB    *pgxpool.Pool
-	Perms middleware.PermissionStore
+	DB     *pgxpool.Pool
+	Perms  middleware.PermissionStore
+	Store  *core.Store
+	Crypto *cryptoutil.Service
+	Notify *notifications.Service
+	Jobs   *jobs.Service
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
-	return &Handler{DB: db, Perms: perms}
+func NewHandler(db *pgxpool.Pool, store *core.Store, crypto *cryptoutil.Service, notify *notifications.Service, jobsSvc *jobs.Service) *Handler {
+	return &Handler{DB: db, Perms: store, Store: store, Crypto: crypto, Notify: notify, Jobs: jobsSvc}
 }
 
 type PaySchedule struct {
@@ -64,6 +70,12 @@ type PayElement struct {
 	Taxable     bool    `json:"taxable"`
 }
 
+type JournalTemplate struct {
+	ID     string         `json:"id"`
+	Name   string         `json:"name"`
+	Config map[string]any `json:"config"`
+}
+
 type PayrollPeriod struct {
 	ID         string    `json:"id"`
 	ScheduleID string    `json:"scheduleId"`
@@ -77,6 +89,7 @@ type PayrollAdjustment struct {
 	EmployeeID  string    `json:"employeeId"`
 	Description string    `json:"description"`
 	Amount      float64   `json:"amount"`
+	EffectiveDate string  `json:"effectiveDate,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -94,6 +107,8 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/groups", h.handleCreateGroup)
 		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/elements", h.handleListElements)
 		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/elements", h.handleCreateElement)
+		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/journal-templates", h.handleListJournalTemplates)
+		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/journal-templates", h.handleCreateJournalTemplate)
 		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/periods", h.handleListPeriods)
 		r.With(middleware.RequirePermission(auth.PermPayrollWrite, h.Perms)).Post("/periods", h.handleCreatePeriod)
 		r.With(middleware.RequirePermission(auth.PermPayrollRead, h.Perms)).Get("/periods/{periodID}/inputs", h.handleListInputs)
@@ -301,6 +316,82 @@ func (h *Handler) handleCreateElement(w http.ResponseWriter, r *http.Request) {
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
 
+func (h *Handler) handleListJournalTemplates(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	rows, err := h.DB.Query(r.Context(), `
+    SELECT id, name, config_json
+    FROM journal_templates
+    WHERE tenant_id = $1
+    ORDER BY name
+  `, user.TenantID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "journal_template_list_failed", "failed to list journal templates", middleware.GetRequestID(r.Context()))
+		return
+	}
+	defer rows.Close()
+
+	var templates []JournalTemplate
+	for rows.Next() {
+		var jt JournalTemplate
+		var configJSON []byte
+		if err := rows.Scan(&jt.ID, &jt.Name, &configJSON); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "journal_template_list_failed", "failed to list journal templates", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if err := json.Unmarshal(configJSON, &jt.Config); err != nil {
+			jt.Config = map[string]any{}
+		}
+		templates = append(templates, jt)
+	}
+	api.Success(w, templates, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleCreateJournalTemplate(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var payload JournalTemplate
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if payload.Name == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "name required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if payload.Config == nil {
+		payload.Config = map[string]any{}
+	}
+	configJSON, err := json.Marshal(payload.Config)
+	if err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid config", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var id string
+	if err := h.DB.QueryRow(r.Context(), `
+    INSERT INTO journal_templates (tenant_id, name, config_json)
+    VALUES ($1,$2,$3)
+    RETURNING id
+  `, user.TenantID, payload.Name, configJSON).Scan(&id); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "journal_template_create_failed", "failed to create journal template", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+}
+
 func (h *Handler) handleListPeriods(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
@@ -471,11 +562,12 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	periodID := chi.URLParam(r, "periodID")
 	var periodStatus string
 	var periodStart, periodEnd time.Time
+	var scheduleID string
 	err := h.DB.QueryRow(r.Context(), `
-    SELECT status, start_date, end_date
+    SELECT status, start_date, end_date, schedule_id
     FROM payroll_periods
     WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, periodID).Scan(&periodStatus, &periodStart, &periodEnd)
+  `, user.TenantID, periodID).Scan(&periodStatus, &periodStart, &periodEnd, &scheduleID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "payroll period not found", middleware.GetRequestID(r.Context()))
 		return
@@ -485,10 +577,28 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	jobID := ""
+	if h.Jobs != nil {
+		if err := h.DB.QueryRow(r.Context(), `
+      INSERT INTO job_runs (tenant_id, job_type, status)
+      VALUES ($1,$2,$3)
+      RETURNING id
+    `, user.TenantID, "payroll_run", "running").Scan(&jobID); err != nil {
+			slog.Warn("payroll job run insert failed", "err", err)
+		}
+	}
+
 	rows, err := h.DB.Query(r.Context(), `
-    SELECT id, salary, currency, COALESCE(bank_account, '')
-    FROM employees
-    WHERE tenant_id = $1 AND status = $2
+    SELECT e.id,
+           e.salary,
+           e.salary_enc,
+           COALESCE(pg.currency, e.currency),
+           COALESCE(e.bank_account, ''),
+           e.bank_account_enc,
+           COALESCE(pg.schedule_id::text, '')
+    FROM employees e
+    LEFT JOIN pay_groups pg ON e.pay_group_id = pg.id
+    WHERE e.tenant_id = $1 AND e.status = $2
   `, user.TenantID, core.EmployeeStatusActive)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to load employees", middleware.GetRequestID(r.Context()))
@@ -496,14 +606,39 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	processed := 0
 	for rows.Next() {
 		var employeeID string
-		var salary float64
+		var salaryPlain *float64
+		var salaryEnc []byte
 		var currency string
-		var bankAccount string
-		if err := rows.Scan(&employeeID, &salary, &currency, &bankAccount); err != nil {
+		var bankPlain string
+		var bankEnc []byte
+		var groupScheduleID string
+		if err := rows.Scan(&employeeID, &salaryPlain, &salaryEnc, &currency, &bankPlain, &bankEnc, &groupScheduleID); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to load employees", middleware.GetRequestID(r.Context()))
 			return
+		}
+		if groupScheduleID != "" && groupScheduleID != scheduleID {
+			continue
+		}
+
+		salary := 0.0
+		if salaryPlain != nil {
+			salary = *salaryPlain
+		}
+		if h.Crypto != nil && h.Crypto.Configured() && len(salaryEnc) > 0 {
+			if decrypted, err := h.Crypto.DecryptString(salaryEnc); err == nil {
+				if parsed, err := strconv.ParseFloat(decrypted, 64); err == nil {
+					salary = parsed
+				}
+			}
+		}
+		bankAccount := bankPlain
+		if h.Crypto != nil && h.Crypto.Configured() && len(bankEnc) > 0 {
+			if decrypted, err := h.Crypto.DecryptString(bankEnc); err == nil {
+				bankAccount = decrypted
+			}
 		}
 
 		inputRows, err := h.DB.Query(r.Context(), `
@@ -534,7 +669,8 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
       SELECT amount
       FROM payroll_adjustments
       WHERE tenant_id = $1 AND period_id = $2 AND employee_id = $3
-    `, user.TenantID, periodID, employeeID)
+        AND (effective_date IS NULL OR (effective_date >= $4 AND effective_date <= $5))
+    `, user.TenantID, periodID, employeeID, periodStart, periodEnd)
 		if err == nil {
 			for adjRows.Next() {
 				var amount float64
@@ -647,6 +783,7 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 			api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to persist payroll results", middleware.GetRequestID(r.Context()))
 			return
 		}
+		processed++
 	}
 
 	if _, err := h.DB.Exec(r.Context(), `
@@ -657,6 +794,19 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "payroll.run", "payroll_period", periodID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, nil); err != nil {
 		slog.Warn("audit payroll.run failed", "err", err)
+	}
+
+	if jobID != "" {
+		detailsJSON, _ := json.Marshal(map[string]any{
+			"processed": processed,
+			"periodId":  periodID,
+		})
+		if _, err := h.DB.Exec(r.Context(), `
+      UPDATE job_runs SET status = $1, details_json = $2, completed_at = now()
+      WHERE id = $3
+    `, "completed", detailsJSON, jobID); err != nil {
+			slog.Warn("payroll job run update failed", "err", err)
+		}
 	}
 
 	api.Success(w, map[string]string{"status": payroll.PeriodStatusReviewed}, middleware.GetRequestID(r.Context()))
@@ -727,7 +877,6 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
   `, user.TenantID, periodID)
 	if err == nil {
 		defer rows.Close()
-		notify := notifications.New(h.DB)
 		for rows.Next() {
 			var payslipID, employeeID string
 			if err := rows.Scan(&payslipID, &employeeID); err != nil {
@@ -747,8 +896,10 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 				slog.Warn("payslip employee user lookup failed", "err", err)
 			}
 			if employeeUserID != "" {
-				if err := notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypePayslipPublished, "Payslip published", "A new payslip is available for download."); err != nil {
-					slog.Warn("payslip notification failed", "err", err)
+				if h.Notify != nil {
+					if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypePayslipPublished, "Payslip published", "A new payslip is available for download."); err != nil {
+						slog.Warn("payslip notification failed", "err", err)
+					}
 				}
 			}
 		}
@@ -959,7 +1110,7 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 
 	periodID := chi.URLParam(r, "periodID")
 	query := `
-    SELECT id, employee_id, description, amount, created_at
+    SELECT id, employee_id, description, amount, effective_date, created_at
     FROM payroll_adjustments
     WHERE tenant_id = $1 AND period_id = $2
   `
@@ -985,9 +1136,13 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 	var adjustments []PayrollAdjustment
 	for rows.Next() {
 		var adj PayrollAdjustment
-		if err := rows.Scan(&adj.ID, &adj.EmployeeID, &adj.Description, &adj.Amount, &adj.CreatedAt); err != nil {
+		var effectiveDate *time.Time
+		if err := rows.Scan(&adj.ID, &adj.EmployeeID, &adj.Description, &adj.Amount, &effectiveDate, &adj.CreatedAt); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "adjustments_list_failed", "failed to list adjustments", middleware.GetRequestID(r.Context()))
 			return
+		}
+		if effectiveDate != nil {
+			adj.EffectiveDate = effectiveDate.Format("2006-01-02")
 		}
 		adjustments = append(adjustments, adj)
 	}
@@ -1007,9 +1162,10 @@ func (h *Handler) handleCreateAdjustment(w http.ResponseWriter, r *http.Request)
 
 	periodID := chi.URLParam(r, "periodID")
 	var payload struct {
-		EmployeeID  string  `json:"employeeId"`
-		Description string  `json:"description"`
-		Amount      float64 `json:"amount"`
+		EmployeeID    string  `json:"employeeId"`
+		Description   string  `json:"description"`
+		Amount        float64 `json:"amount"`
+		EffectiveDate string  `json:"effectiveDate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
@@ -1020,12 +1176,22 @@ func (h *Handler) handleCreateAdjustment(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var effectiveDate any
+	if payload.EffectiveDate != "" {
+		parsed, err := shared.ParseDate(payload.EffectiveDate)
+		if err != nil {
+			api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid effective date", middleware.GetRequestID(r.Context()))
+			return
+		}
+		effectiveDate = parsed
+	}
+
 	var id string
 	err := h.DB.QueryRow(r.Context(), `
-    INSERT INTO payroll_adjustments (tenant_id, period_id, employee_id, description, amount)
-    VALUES ($1,$2,$3,$4,$5)
+    INSERT INTO payroll_adjustments (tenant_id, period_id, employee_id, description, amount, effective_date)
+    VALUES ($1,$2,$3,$4,$5,$6)
     RETURNING id
-  `, user.TenantID, periodID, payload.EmployeeID, payload.Description, payload.Amount).Scan(&id)
+  `, user.TenantID, periodID, payload.EmployeeID, payload.Description, payload.Amount, effectiveDate).Scan(&id)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "adjustment_create_failed", "failed to create adjustment", middleware.GetRequestID(r.Context()))
 		return
@@ -1212,19 +1378,56 @@ func (h *Handler) handleExportJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	expenseAccount := "Payroll Expense"
+	deductionAccount := "Payroll Deductions"
+	cashAccount := "Payroll Cash"
+	headers := []string{"account", "debit", "credit"}
+	if templateID := r.URL.Query().Get("templateId"); templateID != "" {
+		var configJSON []byte
+		if err := h.DB.QueryRow(r.Context(), `
+      SELECT config_json
+      FROM journal_templates
+      WHERE tenant_id = $1 AND id = $2
+    `, user.TenantID, templateID).Scan(&configJSON); err == nil {
+			var cfg map[string]any
+			if err := json.Unmarshal(configJSON, &cfg); err == nil {
+				if val, ok := cfg["expenseAccount"].(string); ok && val != "" {
+					expenseAccount = val
+				}
+				if val, ok := cfg["deductionAccount"].(string); ok && val != "" {
+					deductionAccount = val
+				}
+				if val, ok := cfg["cashAccount"].(string); ok && val != "" {
+					cashAccount = val
+				}
+				if rawHeaders, ok := cfg["headers"].([]any); ok && len(rawHeaders) > 0 {
+					headers = []string{}
+					for _, h := range rawHeaders {
+						if hs, ok := h.(string); ok {
+							headers = append(headers, hs)
+						}
+					}
+					if len(headers) == 0 {
+						headers = []string{"account", "debit", "credit"}
+					}
+				}
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=payroll-journal.csv")
 	writer := csv.NewWriter(w)
-	if err := writer.Write([]string{"account", "debit", "credit"}); err != nil {
+	if err := writer.Write(headers); err != nil {
 		slog.Warn("export journal header write failed", "err", err)
 	}
-	if err := writer.Write([]string{"Payroll Expense", fmt.Sprintf("%.2f", gross), ""}); err != nil {
+	if err := writer.Write([]string{expenseAccount, fmt.Sprintf("%.2f", gross), ""}); err != nil {
 		slog.Warn("export journal expense row write failed", "err", err)
 	}
-	if err := writer.Write([]string{"Payroll Deductions", "", fmt.Sprintf("%.2f", deductions)}); err != nil {
+	if err := writer.Write([]string{deductionAccount, "", fmt.Sprintf("%.2f", deductions)}); err != nil {
 		slog.Warn("export journal deductions row write failed", "err", err)
 	}
-	if err := writer.Write([]string{"Payroll Cash", "", fmt.Sprintf("%.2f", net)}); err != nil {
+	if err := writer.Write([]string{cashAccount, "", fmt.Sprintf("%.2f", net)}); err != nil {
 		slog.Warn("export journal cash row write failed", "err", err)
 	}
 	writer.Flush()
@@ -1281,6 +1484,25 @@ func (h *Handler) handleDownloadPayslip(w http.ResponseWriter, r *http.Request) 
 
 	if fileURL == "" {
 		api.Fail(w, http.StatusInternalServerError, "payslip_missing", "payslip not available", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if h.Crypto != nil && h.Crypto.Configured() && strings.HasSuffix(fileURL, ".enc") {
+		contents, err := os.ReadFile(fileURL)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "payslip_missing", "payslip not available", middleware.GetRequestID(r.Context()))
+			return
+		}
+		plain, err := h.Crypto.Decrypt(contents)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "payslip_missing", "payslip not available", middleware.GetRequestID(r.Context()))
+			return
+		}
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", "attachment; filename=payslip.pdf")
+		if _, err := w.Write(plain); err != nil {
+			slog.Warn("payslip download write failed", "err", err)
+		}
 		return
 	}
 
@@ -1367,6 +1589,25 @@ func (h *Handler) generatePayslipPDF(ctx context.Context, tenantID, periodID, em
 
 	if err := pdf.OutputFileAndClose(filePath); err != nil {
 		return "", err
+	}
+
+	if h.Crypto != nil && h.Crypto.Configured() {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", err
+		}
+		encrypted, err := h.Crypto.Encrypt(data)
+		if err != nil {
+			return "", err
+		}
+		encryptedPath := filePath + ".enc"
+		if err := os.WriteFile(encryptedPath, encrypted, 0o600); err != nil {
+			return "", err
+		}
+		if err := os.Remove(filePath); err != nil {
+			slog.Warn("payslip cleanup failed", "err", err)
+		}
+		return encryptedPath, nil
 	}
 	return filePath, nil
 }

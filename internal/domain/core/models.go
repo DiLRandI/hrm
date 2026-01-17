@@ -19,6 +19,7 @@ type Employee struct {
 	EmploymentType string     `json:"employmentType"`
 	DepartmentID   string     `json:"departmentId"`
 	ManagerID      string     `json:"managerId"`
+	PayGroupID     string     `json:"payGroupId"`
 	StartDate      *time.Time `json:"startDate,omitempty"`
 	EndDate        *time.Time `json:"endDate,omitempty"`
 	Status         string     `json:"status"`

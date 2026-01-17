@@ -2,16 +2,23 @@ package notifications
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Service struct {
-	DB *pgxpool.Pool
+type Mailer interface {
+	Send(ctx context.Context, from, to, subject, body string) error
 }
 
-func New(db *pgxpool.Pool) *Service {
-	return &Service{DB: db}
+type Service struct {
+	DB *pgxpool.Pool
+	Mailer Mailer
+	DefaultFrom string
+}
+
+func New(db *pgxpool.Pool, mailer Mailer) *Service {
+	return &Service{DB: db, Mailer: mailer, DefaultFrom: "no-reply@example.com"}
 }
 
 func (s *Service) Create(ctx context.Context, tenantID, userID, ntype, title, body string) error {
@@ -19,7 +26,34 @@ func (s *Service) Create(ctx context.Context, tenantID, userID, ntype, title, bo
     INSERT INTO notifications (tenant_id, user_id, type, title, body)
     VALUES ($1,$2,$3,$4,$5)
   `, tenantID, userID, ntype, title, body)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if s.Mailer == nil {
+		return nil
+	}
+
+	enabled, from := s.getEmailSettings(ctx, tenantID)
+	if !enabled {
+		return nil
+	}
+	if from == "" {
+		from = s.DefaultFrom
+	}
+
+	var email string
+	if err := s.DB.QueryRow(ctx, "SELECT email FROM users WHERE tenant_id = $1 AND id = $2", tenantID, userID).Scan(&email); err != nil {
+		slog.Warn("notification email lookup failed", "err", err)
+		return nil
+	}
+	if email == "" {
+		return nil
+	}
+	if err := s.Mailer.Send(ctx, from, email, title, body); err != nil {
+		slog.Warn("notification email send failed", "err", err)
+	}
+	return nil
 }
 
 func (s *Service) List(ctx context.Context, tenantID, userID string) ([]map[string]any, error) {
@@ -51,4 +85,50 @@ func (s *Service) List(ctx context.Context, tenantID, userID string) ([]map[stri
 		})
 	}
 	return out, nil
+}
+
+func (s *Service) getEmailSettings(ctx context.Context, tenantID string) (bool, string) {
+	var enabled bool
+	var from string
+	if err := s.DB.QueryRow(ctx, `
+    SELECT email_notifications_enabled, COALESCE(email_from, '')
+    FROM tenant_settings
+    WHERE tenant_id = $1
+  `, tenantID).Scan(&enabled, &from); err == nil {
+		return enabled, from
+	}
+	return false, ""
+}
+
+func (s *Service) GetSettings(ctx context.Context, tenantID string) (bool, string, error) {
+	var enabled bool
+	var from string
+	err := s.DB.QueryRow(ctx, `
+    SELECT email_notifications_enabled, COALESCE(email_from, '')
+    FROM tenant_settings
+    WHERE tenant_id = $1
+  `, tenantID).Scan(&enabled, &from)
+	if err != nil {
+		return false, "", err
+	}
+	return enabled, from, nil
+}
+
+func (s *Service) UpdateSettings(ctx context.Context, tenantID string, enabled bool, from string) error {
+	_, err := s.DB.Exec(ctx, `
+    INSERT INTO tenant_settings (tenant_id, email_notifications_enabled, email_from)
+    VALUES ($1,$2,$3)
+    ON CONFLICT (tenant_id) DO UPDATE
+      SET email_notifications_enabled = EXCLUDED.email_notifications_enabled,
+          email_from = EXCLUDED.email_from,
+          updated_at = now()
+  `, tenantID, enabled, nullIfEmpty(from))
+	return err
+}
+
+func nullIfEmpty(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }

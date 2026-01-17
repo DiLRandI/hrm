@@ -19,6 +19,7 @@ type LeavePolicy struct {
 	Entitlement   float64 `json:"entitlement"`
 	CarryOver     float64 `json:"carryOverLimit"`
 	AllowNegative bool    `json:"allowNegative"`
+	RequiresHRApproval bool `json:"requiresHrApproval"`
 }
 
 type LeaveRequest struct {

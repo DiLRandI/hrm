@@ -1,10 +1,12 @@
 package notificationshandler
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 
+	"hrm/internal/domain/auth"
 	"hrm/internal/domain/notifications"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
@@ -22,6 +24,8 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Route("/notifications", func(r chi.Router) {
 		r.Get("/", h.handleList)
 		r.Post("/{notificationID}/read", h.handleMarkRead)
+		r.Get("/settings", h.handleSettings)
+		r.Put("/settings", h.handleUpdateSettings)
 	})
 }
 
@@ -59,4 +63,50 @@ func (h *Handler) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.Success(w, map[string]string{"status": "read"}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	enabled, from, err := h.Service.GetSettings(r.Context(), user.TenantID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "settings_failed", "failed to load settings", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, map[string]any{"emailEnabled": enabled, "emailFrom": from}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var payload struct {
+		EmailEnabled bool   `json:"emailEnabled"`
+		EmailFrom    string `json:"emailFrom"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if err := h.Service.UpdateSettings(r.Context(), user.TenantID, payload.EmailEnabled, payload.EmailFrom); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "settings_failed", "failed to update settings", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, map[string]string{"status": "updated"}, middleware.GetRequestID(r.Context()))
 }

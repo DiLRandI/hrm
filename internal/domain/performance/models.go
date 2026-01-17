@@ -22,4 +22,5 @@ type ReviewCycle struct {
 	EndDate    time.Time `json:"endDate"`
 	Status     string    `json:"status"`
 	TemplateID string    `json:"templateId"`
+	HRRequired bool      `json:"hrRequired"`
 }

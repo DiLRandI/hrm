@@ -5,11 +5,10 @@ const (
 	ReviewCycleStatusActive = "active"
 	ReviewCycleStatusClosed = "closed"
 
-	ReviewTaskStatusAssigned         = "assigned"
-	ReviewTaskStatusSubmitted        = "submitted"
-	ReviewTaskStatusSelfCompleted    = "self_completed"
-	ReviewTaskStatusManagerCompleted = "manager_completed"
-	ReviewTaskStatusCompleted        = "completed"
+	ReviewTaskStatusSelfPending    = "self_pending"
+	ReviewTaskStatusManagerPending = "manager_pending"
+	ReviewTaskStatusHRPending      = "hr_pending"
+	ReviewTaskStatusCompleted      = "completed"
 
 	GoalStatusActive    = "active"
 	GoalStatusCompleted = "completed"
