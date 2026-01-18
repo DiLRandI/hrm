@@ -194,7 +194,7 @@ func (h *Handler) handleListGroups(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, name, COALESCE(schedule_id, ''), COALESCE(currency, 'USD')
+    SELECT id, name, COALESCE(schedule_id::text, ''), COALESCE(currency, 'USD')
     FROM pay_groups
     WHERE tenant_id = $1
     ORDER BY name
