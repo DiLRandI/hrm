@@ -11,6 +11,7 @@ Start: 2026-01-17
 - 2026-01-17: Expanded tests with backend journey coverage, BOLA guard checks, and frontend workflow tests; added Playwright smoke E2E.
 - 2026-01-17: Added toast notifications and HR-only route guard for the audit screen.
 - 2026-01-17: Began backend refactor by moving audit and notifications DB access into domain services.
+- 2026-01-17: Continued service/store refactor across payroll, performance, and GDPR handlers; moved payslip PDF generation to payroll service; routed audit logging through shared audit service; removed transport-level DB access; fixed accrual job handling to avoid import cycles.
 
 ## Decisions
 - Tenancy: single-tenant per deployment with `tenant_id` column reserved for future multi-tenant support.

@@ -8,10 +8,8 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/auth"
-	"hrm/internal/domain/leave"
 	"hrm/internal/domain/reports"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
@@ -19,12 +17,12 @@ import (
 )
 
 type Handler struct {
-	DB    *pgxpool.Pool
-	Perms middleware.PermissionStore
+	Service *reports.Service
+	Perms   middleware.PermissionStore
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore) *Handler {
-	return &Handler{DB: db, Perms: perms}
+func NewHandler(service *reports.Service, perms middleware.PermissionStore) *Handler {
+	return &Handler{Service: service, Perms: perms}
 }
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
@@ -50,24 +48,40 @@ func (h *Handler) handleEmployeeDashboard(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	var employeeID string
-	if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+	employeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil {
 		slog.Warn("employee lookup failed", "err", err)
 	}
 
 	var leaveBalance float64
-	if err := h.DB.QueryRow(r.Context(), "SELECT COALESCE(SUM(balance),0) FROM leave_balances WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&leaveBalance); err != nil {
-		slog.Warn("leave balance aggregate failed", "err", err)
+	if employeeID != "" {
+		leaveBalance, err = h.Service.LeaveBalance(r.Context(), user.TenantID, employeeID)
+		if err != nil {
+			slog.Warn("leave balance aggregate failed", "err", err)
+		}
+	}
+	if employeeID == "" {
+		leaveBalance = 0
 	}
 
 	var payslipCount int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payslips WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&payslipCount); err != nil {
-		slog.Warn("payslip count failed", "err", err)
+	if employeeID != "" {
+		payslipCount, err = h.Service.PayslipCount(r.Context(), user.TenantID, employeeID)
+		if err != nil {
+			slog.Warn("payslip count failed", "err", err)
+		}
 	}
 
 	var goalCount int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&goalCount); err != nil {
-		slog.Warn("goal count failed", "err", err)
+	if employeeID != "" {
+		goalCount, err = h.Service.GoalCount(r.Context(), user.TenantID, employeeID)
+		if err != nil {
+			slog.Warn("goal count failed", "err", err)
+		}
+	}
+	if employeeID == "" {
+		payslipCount = 0
+		goalCount = 0
 	}
 
 	api.Success(w, reports.EmployeeDashboard(leaveBalance, payslipCount, goalCount), middleware.GetRequestID(r.Context()))
@@ -84,24 +98,37 @@ func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var managerEmployeeID string
-	if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+	managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil {
 		slog.Warn("manager employee lookup failed", "err", err)
 	}
 
 	var pendingApprovals int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status IN ($2,$3)", user.TenantID, leave.StatusPending, leave.StatusPendingHR).Scan(&pendingApprovals); err != nil {
+	pendingApprovals, err = h.Service.PendingApprovals(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("pending approvals count failed", "err", err)
 	}
 
 	var teamGoals int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&teamGoals); err != nil {
-		slog.Warn("team goals count failed", "err", err)
+	if managerEmployeeID != "" {
+		teamGoals, err = h.Service.TeamGoals(r.Context(), user.TenantID, managerEmployeeID)
+		if err != nil {
+			slog.Warn("team goals count failed", "err", err)
+		}
+	}
+	if managerEmployeeID == "" {
+		teamGoals = 0
 	}
 
 	var reviewTasks int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_tasks WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&reviewTasks); err != nil {
-		slog.Warn("review tasks count failed", "err", err)
+	if managerEmployeeID != "" {
+		reviewTasks, err = h.Service.ReviewTasks(r.Context(), user.TenantID, managerEmployeeID)
+		if err != nil {
+			slog.Warn("review tasks count failed", "err", err)
+		}
+	}
+	if managerEmployeeID == "" {
+		reviewTasks = 0
 	}
 
 	api.Success(w, reports.ManagerDashboard(pendingApprovals, teamGoals, reviewTasks), middleware.GetRequestID(r.Context()))
@@ -119,17 +146,20 @@ func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payrollPeriods int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&payrollPeriods); err != nil {
+	payrollPeriods, err := h.Service.PayrollPeriods(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("payroll period count failed", "err", err)
 	}
 
 	var leavePending int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status IN ($2,$3)", user.TenantID, leave.StatusPending, leave.StatusPendingHR).Scan(&leavePending); err != nil {
+	leavePending, err = h.Service.LeavePending(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("leave pending count failed", "err", err)
 	}
 
 	var reviewCycles int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_cycles WHERE tenant_id = $1", user.TenantID).Scan(&reviewCycles); err != nil {
+	reviewCycles, err = h.Service.ReviewCycles(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("review cycles count failed", "err", err)
 	}
 
@@ -142,22 +172,25 @@ func (h *Handler) handleExportEmployeeDashboard(w http.ResponseWriter, r *http.R
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	var employeeID string
-	if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+	employeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "export_failed", "failed to export dashboard", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	var leaveBalance float64
-	if err := h.DB.QueryRow(r.Context(), "SELECT COALESCE(SUM(balance),0) FROM leave_balances WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&leaveBalance); err != nil {
+	leaveBalance, err = h.Service.LeaveBalance(r.Context(), user.TenantID, employeeID)
+	if err != nil {
 		slog.Warn("leave balance aggregate failed", "err", err)
 	}
 	var payslipCount int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payslips WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&payslipCount); err != nil {
+	payslipCount, err = h.Service.PayslipCount(r.Context(), user.TenantID, employeeID)
+	if err != nil {
 		slog.Warn("payslip count failed", "err", err)
 	}
 	var goalCount int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&goalCount); err != nil {
+	goalCount, err = h.Service.GoalCount(r.Context(), user.TenantID, employeeID)
+	if err != nil {
 		slog.Warn("goal count failed", "err", err)
 	}
 
@@ -185,22 +218,25 @@ func (h *Handler) handleExportManagerDashboard(w http.ResponseWriter, r *http.Re
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	var managerEmployeeID string
-	if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+	managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "export_failed", "failed to export dashboard", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	var pendingApprovals int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status IN ($2,$3)", user.TenantID, leave.StatusPending, leave.StatusPendingHR).Scan(&pendingApprovals); err != nil {
+	pendingApprovals, err = h.Service.PendingApprovals(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("pending approvals count failed", "err", err)
 	}
 	var teamGoals int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM goals WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&teamGoals); err != nil {
+	teamGoals, err = h.Service.TeamGoals(r.Context(), user.TenantID, managerEmployeeID)
+	if err != nil {
 		slog.Warn("team goals count failed", "err", err)
 	}
 	var reviewTasks int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_tasks WHERE tenant_id = $1 AND manager_id = $2", user.TenantID, managerEmployeeID).Scan(&reviewTasks); err != nil {
+	reviewTasks, err = h.Service.ReviewTasks(r.Context(), user.TenantID, managerEmployeeID)
+	if err != nil {
 		slog.Warn("review tasks count failed", "err", err)
 	}
 
@@ -233,16 +269,20 @@ func (h *Handler) handleExportHRDashboard(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	var err error
 	var payrollPeriods int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&payrollPeriods); err != nil {
+	payrollPeriods, err = h.Service.PayrollPeriods(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("payroll period count failed", "err", err)
 	}
 	var leavePending int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM leave_requests WHERE tenant_id = $1 AND status IN ($2,$3)", user.TenantID, leave.StatusPending, leave.StatusPendingHR).Scan(&leavePending); err != nil {
+	leavePending, err = h.Service.LeavePending(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("leave pending count failed", "err", err)
 	}
 	var reviewCycles int
-	if err := h.DB.QueryRow(r.Context(), "SELECT COUNT(1) FROM review_cycles WHERE tenant_id = $1", user.TenantID).Scan(&reviewCycles); err != nil {
+	reviewCycles, err = h.Service.ReviewCycles(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("review cycles count failed", "err", err)
 	}
 
@@ -272,45 +312,11 @@ func (h *Handler) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 	}
 	page := shared.ParsePagination(r, 100, 500)
 	jobType := r.URL.Query().Get("jobType")
-	query := `
-    SELECT id, job_type, status, details_json, started_at, completed_at
-    FROM job_runs
-    WHERE tenant_id = $1
-  `
-	args := []any{user.TenantID}
-	if jobType != "" {
-		query += " AND job_type = $2"
-		args = append(args, jobType)
-	}
-	limitPos := len(args) + 1
-	offsetPos := len(args) + 2
-	query += fmt.Sprintf(" ORDER BY started_at DESC LIMIT $%d OFFSET $%d", limitPos, offsetPos)
-	args = append(args, page.Limit, page.Offset)
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	runs, err := h.Service.JobRuns(r.Context(), user.TenantID, jobType, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "job_runs_failed", "failed to list job runs", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var runs []map[string]any
-	for rows.Next() {
-		var id, jobTypeVal, status string
-		var details any
-		var startedAt, completedAt any
-		if err := rows.Scan(&id, &jobTypeVal, &status, &details, &startedAt, &completedAt); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "job_runs_failed", "failed to list job runs", middleware.GetRequestID(r.Context()))
-			return
-		}
-		runs = append(runs, map[string]any{
-			"id":          id,
-			"jobType":     jobTypeVal,
-			"status":      status,
-			"details":     details,
-			"startedAt":   startedAt,
-			"completedAt": completedAt,
-		})
 	}
 	api.Success(w, runs, middleware.GetRequestID(r.Context()))
 }

@@ -290,6 +290,300 @@ func nullIfEmpty(value string) any {
 	return value
 }
 
+func (s *Store) MFAEnabled(ctx context.Context, userID string) (bool, error) {
+	var enabled bool
+	if err := s.DB.QueryRow(ctx, "SELECT mfa_enabled FROM users WHERE id = $1", userID).Scan(&enabled); err != nil {
+		return false, err
+	}
+	return enabled, nil
+}
+
+func (s *Store) InsertAccessLog(ctx context.Context, tenantID, actorID, employeeID, requestID string, fields []string) error {
+	_, err := s.DB.Exec(ctx, `
+    INSERT INTO access_logs (tenant_id, actor_user_id, employee_id, fields, request_id)
+    VALUES ($1,$2,$3,$4,$5)
+  `, tenantID, actorID, employeeID, fields, requestID)
+	return err
+}
+
+func (s *Store) CreateManagerRelation(ctx context.Context, employeeID, managerID string) error {
+	_, err := s.DB.Exec(ctx, `
+    INSERT INTO manager_relations (employee_id, manager_id, start_date)
+    VALUES ($1, $2, CURRENT_DATE)
+  `, employeeID, managerID)
+	return err
+}
+
+func (s *Store) CloseManagerRelations(ctx context.Context, employeeID string) error {
+	_, err := s.DB.Exec(ctx, `
+    UPDATE manager_relations
+    SET end_date = CURRENT_DATE
+    WHERE employee_id = $1 AND end_date IS NULL
+  `, employeeID)
+	return err
+}
+
+func (s *Store) DepartmentCount(ctx context.Context, tenantID string) (int, error) {
+	var total int
+	if err := s.DB.QueryRow(ctx, "SELECT COUNT(1) FROM departments WHERE tenant_id = $1", tenantID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Store) ListDepartments(ctx context.Context, tenantID string, limit, offset int) ([]Department, error) {
+	rows, err := s.DB.Query(ctx, `
+    SELECT id, name, parent_id, manager_id, created_at
+    FROM departments
+    WHERE tenant_id = $1
+    ORDER BY name
+    LIMIT $2 OFFSET $3
+  `, tenantID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var departments []Department
+	for rows.Next() {
+		var dep Department
+		if err := rows.Scan(&dep.ID, &dep.Name, &dep.ParentID, &dep.ManagerID, &dep.CreatedAt); err != nil {
+			return nil, err
+		}
+		departments = append(departments, dep)
+	}
+	return departments, nil
+}
+
+func (s *Store) CreateDepartment(ctx context.Context, tenantID string, dep Department) (string, error) {
+	var id string
+	err := s.DB.QueryRow(ctx, `
+    INSERT INTO departments (tenant_id, name, parent_id, manager_id)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id
+  `, tenantID, dep.Name, nullIfEmpty(dep.ParentID), nullIfEmpty(dep.ManagerID)).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *Store) UpdateDepartment(ctx context.Context, tenantID, departmentID string, dep Department) (bool, error) {
+	cmd, err := s.DB.Exec(ctx, `
+    UPDATE departments
+    SET name = $1, parent_id = $2, manager_id = $3
+    WHERE tenant_id = $4 AND id = $5
+  `, dep.Name, nullIfEmpty(dep.ParentID), nullIfEmpty(dep.ManagerID), tenantID, departmentID)
+	if err != nil {
+		return false, err
+	}
+	return cmd.RowsAffected() > 0, nil
+}
+
+func (s *Store) DepartmentHasEmployees(ctx context.Context, tenantID, departmentID string) (bool, error) {
+	var count int
+	if err := s.DB.QueryRow(ctx, `
+    SELECT COUNT(1) FROM employees WHERE tenant_id = $1 AND department_id = $2
+  `, tenantID, departmentID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) DeleteDepartment(ctx context.Context, tenantID, departmentID string) error {
+	_, err := s.DB.Exec(ctx, `
+    DELETE FROM departments WHERE tenant_id = $1 AND id = $2
+  `, tenantID, departmentID)
+	return err
+}
+
+func (s *Store) OrgChartNodes(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error) {
+	query := `
+    SELECT id, first_name, last_name, COALESCE(manager_id::text,''), COALESCE(department_id::text,'')
+    FROM employees
+    WHERE tenant_id = $1`
+	args := []any{tenantID}
+	if employeeID != "" {
+		query += " AND (id = $2 OR manager_id = $2)"
+		args = append(args, employeeID)
+	}
+	query += " ORDER BY last_name, first_name"
+
+	rows, err := s.DB.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var nodes []map[string]any
+	for rows.Next() {
+		var id, first, last, managerID, departmentID string
+		if err := rows.Scan(&id, &first, &last, &managerID, &departmentID); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, map[string]any{
+			"id":           id,
+			"name":         first + " " + last,
+			"managerId":    managerID,
+			"departmentId": departmentID,
+		})
+	}
+	return nodes, nil
+}
+
+func (s *Store) ManagerHistory(ctx context.Context, employeeID string) ([]map[string]any, error) {
+	rows, err := s.DB.Query(ctx, `
+    SELECT mr.manager_id, COALESCE(m.first_name,''), COALESCE(m.last_name,''), mr.start_date, mr.end_date
+    FROM manager_relations mr
+    LEFT JOIN employees m ON mr.manager_id = m.id
+    WHERE mr.employee_id = $1
+    ORDER BY mr.start_date DESC
+  `, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var history []map[string]any
+	for rows.Next() {
+		var managerID, first, last string
+		var startDate, endDate any
+		if err := rows.Scan(&managerID, &first, &last, &startDate, &endDate); err != nil {
+			return nil, err
+		}
+		history = append(history, map[string]any{
+			"managerId": managerID,
+			"name":      first + " " + last,
+			"startDate": startDate,
+			"endDate":   endDate,
+		})
+	}
+	return history, nil
+}
+
+func (s *Store) ListPermissions(ctx context.Context) ([]map[string]string, error) {
+	rows, err := s.DB.Query(ctx, `
+    SELECT key, COALESCE(description,'')
+    FROM permissions
+    ORDER BY key
+  `)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []map[string]string
+	for rows.Next() {
+		var key, desc string
+		if err := rows.Scan(&key, &desc); err != nil {
+			return nil, err
+		}
+		out = append(out, map[string]string{"key": key, "description": desc})
+	}
+	return out, nil
+}
+
+func (s *Store) ListRoles(ctx context.Context, tenantID string) ([]map[string]any, error) {
+	rows, err := s.DB.Query(ctx, `
+    SELECT r.id,
+           r.name,
+           COALESCE(array_agg(p.key) FILTER (WHERE p.key IS NOT NULL), '{}') AS permissions
+    FROM roles r
+    LEFT JOIN role_permissions rp ON rp.role_id = r.id
+    LEFT JOIN permissions p ON rp.permission_id = p.id
+    WHERE r.tenant_id = $1
+    GROUP BY r.id
+    ORDER BY r.name
+  `, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roles []map[string]any
+	for rows.Next() {
+		var id, name string
+		var perms []string
+		if err := rows.Scan(&id, &name, &perms); err != nil {
+			return nil, err
+		}
+		roles = append(roles, map[string]any{"id": id, "name": name, "permissions": perms})
+	}
+	return roles, nil
+}
+
+func (s *Store) RoleTenant(ctx context.Context, roleID string) (string, error) {
+	var tenantID string
+	if err := s.DB.QueryRow(ctx, "SELECT tenant_id::text FROM roles WHERE id = $1", roleID).Scan(&tenantID); err != nil {
+		return "", err
+	}
+	return tenantID, nil
+}
+
+func (s *Store) UpdateRolePermissions(ctx context.Context, roleID string, permissions []string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, "DELETE FROM role_permissions WHERE role_id = $1", roleID); err != nil {
+		return err
+	}
+
+	if len(permissions) > 0 {
+		rows, err := tx.Query(ctx, `
+      SELECT id, key FROM permissions WHERE key = ANY($1)
+    `, permissions)
+		if err != nil {
+			return err
+		}
+		var permissionIDs []string
+		for rows.Next() {
+			var id, key string
+			if err := rows.Scan(&id, &key); err != nil {
+				rows.Close()
+				return err
+			}
+			permissionIDs = append(permissionIDs, id)
+		}
+		rows.Close()
+		for _, permID := range permissionIDs {
+			if _, err := tx.Exec(ctx, "INSERT INTO role_permissions (role_id, permission_id) VALUES ($1,$2)", roleID, permID); err != nil {
+				return err
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) EmployeeIDByUserID(ctx context.Context, tenantID, userID string) (string, error) {
+	var employeeID string
+	if err := s.DB.QueryRow(ctx, "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", tenantID, userID).Scan(&employeeID); err != nil {
+		return "", err
+	}
+	return employeeID, nil
+}
+
+func (s *Store) ManagerIDByEmployeeID(ctx context.Context, tenantID, employeeID string) (string, error) {
+	var managerID string
+	if err := s.DB.QueryRow(ctx, "SELECT manager_id FROM employees WHERE tenant_id = $1 AND id = $2", tenantID, employeeID).Scan(&managerID); err != nil {
+		return "", err
+	}
+	return managerID, nil
+}
+
+func (s *Store) UserIDByEmployeeID(ctx context.Context, tenantID, employeeID string) (string, error) {
+	var userID string
+	if err := s.DB.QueryRow(ctx, "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", tenantID, employeeID).Scan(&userID); err != nil {
+		return "", err
+	}
+	return userID, nil
+}
+
 func encryptEmployeeSensitive(crypto *cryptoutil.Service, emp Employee) ([]byte, []byte, []byte, error) {
 	if crypto == nil || !crypto.Configured() {
 		return nil, nil, nil, nil

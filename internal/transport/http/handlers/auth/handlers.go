@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
@@ -22,13 +21,13 @@ import (
 )
 
 type Handler struct {
-	DB     *pgxpool.Pool
-	Secret string
-	Crypto *cryptoutil.Service
+	Service *auth.Service
+	Secret  string
+	Crypto  *cryptoutil.Service
 }
 
-func NewHandler(db *pgxpool.Pool, secret string, crypto *cryptoutil.Service) *Handler {
-	return &Handler{DB: db, Secret: secret, Crypto: crypto}
+func NewHandler(service *auth.Service, secret string, crypto *cryptoutil.Service) *Handler {
+	return &Handler{Service: service, Secret: secret, Crypto: crypto}
 }
 
 type loginRequest struct {
@@ -57,40 +56,32 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id, tenantID, roleID, roleName, hash string
-	var mfaEnabled bool
-	var mfaSecretEnc []byte
-	err := h.DB.QueryRow(r.Context(), `
-    SELECT u.id, u.tenant_id, u.role_id, r.name, u.password_hash, u.mfa_enabled, u.mfa_secret_enc
-    FROM users u
-    JOIN roles r ON u.role_id = r.id
-    WHERE u.email = $1 AND u.status = $2
-  `, payload.Email, core.UserStatusActive).Scan(&id, &tenantID, &roleID, &roleName, &hash, &mfaEnabled, &mfaSecretEnc)
+	userRow, err := h.Service.FindActiveUserByEmail(r.Context(), payload.Email, core.UserStatusActive)
 	if err != nil {
 		api.Fail(w, http.StatusUnauthorized, "invalid_credentials", "invalid credentials", requestctx.GetRequestID(r.Context()))
 		return
 	}
 
-	if err := auth.CheckPassword(hash, payload.Password); err != nil {
+	if err := auth.CheckPassword(userRow.Password, payload.Password); err != nil {
 		api.Fail(w, http.StatusUnauthorized, "invalid_credentials", "invalid credentials", requestctx.GetRequestID(r.Context()))
 		return
 	}
 
-	if mfaEnabled {
+	if userRow.MFAEnabled {
 		if payload.MFACode == "" {
 			api.Fail(w, http.StatusUnauthorized, "mfa_required", "mfa code required", requestctx.GetRequestID(r.Context()))
 			return
 		}
 		secret := ""
 		if h.Crypto != nil && h.Crypto.Configured() {
-			decoded, err := h.Crypto.DecryptString(mfaSecretEnc)
+			decoded, err := h.Crypto.DecryptString(userRow.MFASecretEn)
 			if err != nil {
 				api.Fail(w, http.StatusUnauthorized, "mfa_invalid", "invalid mfa configuration", requestctx.GetRequestID(r.Context()))
 				return
 			}
 			secret = decoded
 		} else {
-			secret = string(mfaSecretEnc)
+			secret = string(userRow.MFASecretEn)
 		}
 		if secret == "" || !totp.Validate(payload.MFACode, secret) {
 			api.Fail(w, http.StatusUnauthorized, "mfa_invalid", "invalid mfa code", requestctx.GetRequestID(r.Context()))
@@ -104,33 +95,30 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionExpires := time.Now().Add(8 * time.Hour)
-	if _, err := h.DB.Exec(r.Context(), `
-    INSERT INTO sessions (user_id, refresh_token, expires_at)
-    VALUES ($1,$2,$3)
-  `, id, auth.HashToken(sessionID), sessionExpires); err != nil {
+	if err := h.Service.CreateSession(r.Context(), userRow.ID, auth.HashToken(sessionID), sessionExpires); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "session_error", "failed to start session", requestctx.GetRequestID(r.Context()))
 		return
 	}
 
-	token, err := auth.GenerateToken(h.Secret, auth.Claims{UserID: id, TenantID: tenantID, RoleID: roleID, RoleName: roleName, SessionID: sessionID}, 8*time.Hour)
+	token, err := auth.GenerateToken(h.Secret, auth.Claims{UserID: userRow.ID, TenantID: userRow.TenantID, RoleID: userRow.RoleID, RoleName: userRow.RoleName, SessionID: sessionID}, 8*time.Hour)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "token_error", "failed to issue token", requestctx.GetRequestID(r.Context()))
 		return
 	}
 
-	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET last_login = now() WHERE id = $1", id); err != nil {
-		slog.Warn("update last_login failed", "userId", id, "err", err)
+	if err := h.Service.UpdateLastLogin(r.Context(), userRow.ID); err != nil {
+		slog.Warn("update last_login failed", "userId", userRow.ID, "err", err)
 	}
 
 	api.Success(w, map[string]any{
 		"token": token,
-		"user":  map[string]string{"id": id, "tenantId": tenantID, "roleId": roleID, "role": roleName},
+		"user":  map[string]string{"id": userRow.ID, "tenantId": userRow.TenantID, "roleId": userRow.RoleID, "role": userRow.RoleName},
 	}, requestctx.GetRequestID(r.Context()))
 }
 
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	if user, ok := middleware.GetUser(r.Context()); ok && user.SessionID != "" {
-		if _, err := h.DB.Exec(r.Context(), "UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND refresh_token = $2", user.UserID, auth.HashToken(user.SessionID)); err != nil {
+		if err := h.Service.RevokeSession(r.Context(), user.UserID, auth.HashToken(user.SessionID)); err != nil {
 			slog.Warn("logout session revoke failed", "userId", user.UserID, "err", err)
 		}
 	}
@@ -154,12 +142,8 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var count int
-	if err := h.DB.QueryRow(r.Context(), `
-    SELECT COUNT(1)
-    FROM sessions
-    WHERE user_id = $1 AND refresh_token = $2 AND expires_at > now() AND revoked_at IS NULL
-  `, claims.UserID, auth.HashToken(claims.SessionID)).Scan(&count); err != nil || count == 0 {
+	valid, err := h.Service.SessionValid(r.Context(), claims.UserID, auth.HashToken(claims.SessionID))
+	if err != nil || !valid {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "session expired", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -170,11 +154,7 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionExpires := time.Now().Add(8 * time.Hour)
-	if _, err := h.DB.Exec(r.Context(), `
-    UPDATE sessions
-    SET refresh_token = $1, expires_at = $2, rotated_at = now()
-    WHERE user_id = $3 AND refresh_token = $4
-  `, auth.HashToken(newSessionID), sessionExpires, claims.UserID, auth.HashToken(claims.SessionID)); err != nil {
+	if err := h.Service.RotateSession(r.Context(), claims.UserID, auth.HashToken(claims.SessionID), auth.HashToken(newSessionID), sessionExpires); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "session_error", "failed to rotate session", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -220,9 +200,7 @@ func (h *Handler) HandleMFASetup(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusInternalServerError, "mfa_setup_failed", "failed to store mfa secret", requestctx.GetRequestID(r.Context()))
 		return
 	}
-	if _, err := h.DB.Exec(r.Context(), `
-    UPDATE users SET mfa_secret_enc = $1, mfa_enabled = false WHERE id = $2
-  `, encrypted, user.UserID); err != nil {
+	if err := h.Service.UpdateMFASecret(r.Context(), user.UserID, encrypted); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "mfa_setup_failed", "failed to store mfa secret", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -247,8 +225,8 @@ func (h *Handler) HandleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var secretEnc []byte
-	if err := h.DB.QueryRow(r.Context(), "SELECT mfa_secret_enc FROM users WHERE id = $1", user.UserID).Scan(&secretEnc); err != nil {
+	secretEnc, err := h.Service.GetMFASecret(r.Context(), user.UserID)
+	if err != nil {
 		api.Fail(w, http.StatusBadRequest, "mfa_missing", "mfa setup required", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -262,7 +240,7 @@ func (h *Handler) HandleMFAEnable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET mfa_enabled = true WHERE id = $1", user.UserID); err != nil {
+	if err := h.Service.SetMFAEnabled(r.Context(), user.UserID, true); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "mfa_enable_failed", "failed to enable mfa", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -284,8 +262,8 @@ func (h *Handler) HandleMFADisable(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", requestctx.GetRequestID(r.Context()))
 		return
 	}
-	var secretEnc []byte
-	if err := h.DB.QueryRow(r.Context(), "SELECT mfa_secret_enc FROM users WHERE id = $1", user.UserID).Scan(&secretEnc); err != nil {
+	secretEnc, err := h.Service.GetMFASecret(r.Context(), user.UserID)
+	if err != nil {
 		api.Fail(w, http.StatusBadRequest, "mfa_missing", "mfa setup required", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -298,7 +276,7 @@ func (h *Handler) HandleMFADisable(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusBadRequest, "mfa_invalid", "invalid mfa code", requestctx.GetRequestID(r.Context()))
 		return
 	}
-	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET mfa_enabled = false WHERE id = $1", user.UserID); err != nil {
+	if err := h.Service.SetMFAEnabled(r.Context(), user.UserID, false); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "mfa_disable_failed", "failed to disable mfa", requestctx.GetRequestID(r.Context()))
 		return
 	}
@@ -312,8 +290,7 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID string
-	err := h.DB.QueryRow(r.Context(), "SELECT id FROM users WHERE email = $1", payload.Email).Scan(&userID)
+	userID, err := h.Service.UserIDByEmail(r.Context(), payload.Email)
 	if err == nil {
 		token, err := generateToken()
 		if err != nil {
@@ -323,7 +300,7 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 		}
 		expires := time.Now().Add(2 * time.Hour)
 		hashed := auth.HashToken(token)
-		if _, err := h.DB.Exec(r.Context(), "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, hashed, expires); err != nil {
+		if err := h.Service.CreatePasswordReset(r.Context(), userID, hashed, expires); err != nil {
 			slog.Warn("password reset insert failed", "userId", userID, "err", err)
 		}
 	}
@@ -338,12 +315,7 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var userID string
-	err := h.DB.QueryRow(r.Context(), `
-    SELECT user_id
-    FROM password_resets
-    WHERE token = $1 AND expires_at > now() AND used_at IS NULL
-  `, auth.HashToken(payload.Token)).Scan(&userID)
+	userID, err := h.Service.PasswordResetUserID(r.Context(), auth.HashToken(payload.Token))
 	if err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_token", "invalid or expired token", requestctx.GetRequestID(r.Context()))
 		return
@@ -355,11 +327,11 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.DB.Exec(r.Context(), "UPDATE users SET password_hash = $1 WHERE id = $2", hash, userID); err != nil {
+	if err := h.Service.UpdateUserPassword(r.Context(), userID, hash); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "update_failed", "failed to update password", requestctx.GetRequestID(r.Context()))
 		return
 	}
-	if _, err := h.DB.Exec(r.Context(), "UPDATE password_resets SET used_at = now() WHERE token = $1", auth.HashToken(payload.Token)); err != nil {
+	if err := h.Service.MarkPasswordResetUsed(r.Context(), auth.HashToken(payload.Token)); err != nil {
 		slog.Warn("password reset mark used failed", "err", err)
 	}
 

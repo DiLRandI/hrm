@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
@@ -21,13 +20,14 @@ import (
 )
 
 type Handler struct {
-	DB     *pgxpool.Pool
-	Perms  middleware.PermissionStore
-	Notify *notifications.Service
+	Service *performance.Service
+	Perms   middleware.PermissionStore
+	Notify  *notifications.Service
+	Audit   *audit.Service
 }
 
-func NewHandler(db *pgxpool.Pool, perms middleware.PermissionStore, notify *notifications.Service) *Handler {
-	return &Handler{DB: db, Perms: perms, Notify: notify}
+func NewHandler(service *performance.Service, perms middleware.PermissionStore, notify *notifications.Service, auditSvc *audit.Service) *Handler {
+	return &Handler{Service: service, Perms: perms, Notify: notify, Audit: auditSvc}
 }
 
 type reviewTemplate struct {
@@ -77,7 +77,7 @@ func (h *Handler) handleListGoals(w http.ResponseWriter, r *http.Request) {
 	args := []any{user.TenantID}
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
 			slog.Warn("goal list employee lookup failed", "err", err)
 		}
 		query += " AND employee_id = $2"
@@ -85,7 +85,7 @@ func (h *Handler) handleListGoals(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("goal list manager lookup failed", "err", err)
 		}
 		query += " AND (manager_id = $2 OR employee_id = $2)"
@@ -93,7 +93,7 @@ func (h *Handler) handleListGoals(w http.ResponseWriter, r *http.Request) {
 	}
 	query += " ORDER BY created_at DESC"
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.Service.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "goal_list_failed", "failed to list goals", middleware.GetRequestID(r.Context()))
 		return
@@ -136,7 +136,7 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if payload.EmployeeID == "" {
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID); err != nil {
 			slog.Warn("goal create employee lookup failed", "err", err)
 		}
 	}
@@ -145,7 +145,7 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if payload.ManagerID == "" {
-		if err := h.DB.QueryRow(r.Context(), "SELECT manager_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.EmployeeID).Scan(&payload.ManagerID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT manager_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.EmployeeID).Scan(&payload.ManagerID); err != nil {
 			slog.Warn("goal create manager lookup failed", "err", err)
 		}
 	}
@@ -164,7 +164,7 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id string
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     INSERT INTO goals (tenant_id, employee_id, manager_id, title, description, metric, due_date, weight, status, progress)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
     RETURNING id
@@ -172,12 +172,12 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusInternalServerError, "goal_create_failed", "failed to create goal", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.goal.create", "goal", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.goal.create", "goal", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.goal.create failed", "err", err)
 	}
 	if h.Notify != nil && payload.EmployeeID != "" {
 		var employeeUserID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.EmployeeID).Scan(&employeeUserID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.EmployeeID).Scan(&employeeUserID); err != nil {
 			slog.Warn("goal create employee user lookup failed", "err", err)
 		}
 		if employeeUserID != "" {
@@ -188,7 +188,7 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Notify != nil && payload.ManagerID != "" {
 		var managerUserID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.ManagerID).Scan(&managerUserID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.ManagerID).Scan(&managerUserID); err != nil {
 			slog.Warn("goal create manager user lookup failed", "err", err)
 		}
 		if managerUserID != "" {
@@ -218,7 +218,7 @@ func (h *Handler) handleUpdateGoal(w http.ResponseWriter, r *http.Request) {
 		Progress    float64
 		DueDate     any
 	}
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     SELECT employee_id, manager_id, title, description, metric, weight, status, progress, due_date
     FROM goals
     WHERE tenant_id = $1 AND id = $2
@@ -230,7 +230,7 @@ func (h *Handler) handleUpdateGoal(w http.ResponseWriter, r *http.Request) {
 	switch user.RoleName {
 	case auth.RoleEmployee:
 		var selfEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
 			slog.Warn("goal update self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || selfEmployeeID != employeeID {
@@ -239,7 +239,7 @@ func (h *Handler) handleUpdateGoal(w http.ResponseWriter, r *http.Request) {
 		}
 	case auth.RoleManager:
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("goal update manager lookup failed", "err", err)
 		}
 		if managerEmployeeID == "" || (managerEmployeeID != managerID && managerEmployeeID != employeeID) {
@@ -291,7 +291,7 @@ func (h *Handler) handleUpdateGoal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if _, err := h.DB.Exec(r.Context(), `
+	if _, err := h.Service.Exec(r.Context(), `
     UPDATE goals
     SET title = $1, description = $2, metric = $3, weight = $4, status = $5, progress = $6, due_date = $7
     WHERE tenant_id = $8 AND id = $9
@@ -300,7 +300,7 @@ func (h *Handler) handleUpdateGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.goal.update", "goal", goalID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.goal.update", "goal", goalID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.goal.update failed", "err", err)
 	}
 	api.Success(w, map[string]string{"id": goalID}, middleware.GetRequestID(r.Context()))
@@ -322,7 +322,7 @@ func (h *Handler) handleAddGoalComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.DB.Exec(r.Context(), `
+	_, err := h.Service.Exec(r.Context(), `
     INSERT INTO goal_comments (goal_id, author_id, comment)
     VALUES ($1,$2,$3)
   `, goalID, user.UserID, payload.Comment)
@@ -341,7 +341,7 @@ func (h *Handler) handleListReviewTemplates(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	rows, err := h.DB.Query(r.Context(), `
+	rows, err := h.Service.Query(r.Context(), `
     SELECT id, name, rating_scale_json, questions_json, created_at
     FROM review_templates
     WHERE tenant_id = $1
@@ -409,7 +409,7 @@ func (h *Handler) handleCreateReviewTemplate(w http.ResponseWriter, r *http.Requ
 	}
 
 	var id string
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     INSERT INTO review_templates (tenant_id, name, rating_scale_json, questions_json)
     VALUES ($1,$2,$3,$4)
     RETURNING id
@@ -418,7 +418,7 @@ func (h *Handler) handleCreateReviewTemplate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.review_template.create", "review_template", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.review_template.create", "review_template", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.review_template.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
@@ -430,7 +430,7 @@ func (h *Handler) handleListReviewCycles(w http.ResponseWriter, r *http.Request)
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	rows, err := h.DB.Query(r.Context(), `
+	rows, err := h.Service.Query(r.Context(), `
     SELECT id, name, start_date, end_date, status, COALESCE(template_id, ''), hr_required
     FROM review_cycles
     WHERE tenant_id = $1
@@ -494,7 +494,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 	}
 
 	var id string
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     INSERT INTO review_cycles (tenant_id, name, start_date, end_date, status, template_id, hr_required)
     VALUES ($1,$2,$3,$4,$5,$6,$7)
     RETURNING id
@@ -515,7 +515,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 		args = append(args, payload.EmployeeIDs)
 	}
 
-	rows, err := h.DB.Query(r.Context(), employeesQuery, args...)
+	rows, err := h.Service.Query(r.Context(), employeesQuery, args...)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -524,7 +524,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 				slog.Warn("review cycle employee scan failed", "err", err)
 				continue
 			}
-			if _, err := h.DB.Exec(r.Context(), `
+			if _, err := h.Service.Exec(r.Context(), `
         INSERT INTO review_tasks (tenant_id, cycle_id, employee_id, manager_id, status, self_due, manager_due, hr_due)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       `, user.TenantID, id, employeeID, nullIfEmpty(managerID), performance.ReviewTaskStatusSelfPending, midpoint, endDate, endDate); err != nil {
@@ -538,7 +538,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 			}
 			if managerID != "" {
 				var managerUserID string
-				if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, managerID).Scan(&managerUserID); err != nil {
+				if err := h.Service.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, managerID).Scan(&managerUserID); err != nil {
 					slog.Warn("review cycle manager user lookup failed", "err", err)
 				}
 				if h.Notify != nil && managerUserID != "" {
@@ -550,7 +550,7 @@ func (h *Handler) handleCreateReviewCycle(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.review_cycle.create", "review_cycle", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.review_cycle.create", "review_cycle", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.review_cycle.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
@@ -569,7 +569,7 @@ func (h *Handler) handleFinalizeReviewCycle(w http.ResponseWriter, r *http.Reque
 
 	cycleID := chi.URLParam(r, "cycleID")
 	var status string
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     SELECT status
     FROM review_cycles
     WHERE tenant_id = $1 AND id = $2
@@ -582,7 +582,7 @@ func (h *Handler) handleFinalizeReviewCycle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if _, err := h.DB.Exec(r.Context(), `
+	if _, err := h.Service.Exec(r.Context(), `
     UPDATE review_cycles
     SET status = $1
     WHERE tenant_id = $2 AND id = $3
@@ -591,7 +591,7 @@ func (h *Handler) handleFinalizeReviewCycle(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if _, err := h.DB.Exec(r.Context(), `
+	if _, err := h.Service.Exec(r.Context(), `
     UPDATE review_tasks
     SET status = $1
     WHERE tenant_id = $2 AND cycle_id = $3
@@ -599,7 +599,7 @@ func (h *Handler) handleFinalizeReviewCycle(w http.ResponseWriter, r *http.Reque
 		slog.Warn("review tasks finalize failed", "err", err)
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.review.finalize", "review_cycle", cycleID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"status": performance.ReviewCycleStatusClosed}); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.review.finalize", "review_cycle", cycleID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"status": performance.ReviewCycleStatusClosed}); err != nil {
 		slog.Warn("audit performance.review.finalize failed", "err", err)
 	}
 
@@ -620,7 +620,7 @@ func (h *Handler) handleListReviewTasks(w http.ResponseWriter, r *http.Request) 
 	args := []any{user.TenantID}
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
 			slog.Warn("review tasks employee lookup failed", "err", err)
 		}
 		query += " AND employee_id = $2"
@@ -628,7 +628,7 @@ func (h *Handler) handleListReviewTasks(w http.ResponseWriter, r *http.Request) 
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("review tasks manager lookup failed", "err", err)
 		}
 		query += " AND (manager_id = $2 OR employee_id = $2)"
@@ -636,7 +636,7 @@ func (h *Handler) handleListReviewTasks(w http.ResponseWriter, r *http.Request) 
 	}
 	query += " ORDER BY created_at DESC"
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.Service.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "review_tasks_failed", "failed to list review tasks", middleware.GetRequestID(r.Context()))
 		return
@@ -675,7 +675,7 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 	taskID := chi.URLParam(r, "taskID")
 	var taskEmployeeID, taskManagerID, taskStatus, templateID string
 	var hrRequired bool
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     SELECT rt.employee_id, rt.manager_id, rt.status, COALESCE(rc.template_id::text,''), rc.hr_required
     FROM review_tasks rt
     JOIN review_cycles rc ON rt.cycle_id = rc.id
@@ -687,7 +687,7 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 
 	if user.RoleName == auth.RoleEmployee {
 		var selfEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
 			slog.Warn("review response self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || selfEmployeeID != taskEmployeeID {
@@ -701,7 +701,7 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("review response manager lookup failed", "err", err)
 		}
 		if managerEmployeeID == "" || managerEmployeeID != taskManagerID {
@@ -734,7 +734,7 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 
 	if templateID != "" {
 		var questionsJSON []byte
-		if err := h.DB.QueryRow(r.Context(), `
+		if err := h.Service.QueryRow(r.Context(), `
       SELECT questions_json FROM review_templates WHERE tenant_id = $1 AND id = $2
     `, user.TenantID, templateID).Scan(&questionsJSON); err == nil {
 			var questions []any
@@ -766,7 +766,7 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	if _, err := h.DB.Exec(r.Context(), `
+	if _, err := h.Service.Exec(r.Context(), `
     INSERT INTO review_responses (tenant_id, task_id, respondent_id, role, responses_json, rating, submitted_at)
     VALUES ($1,$2,$3,$4,$5,$6,now())
   `, user.TenantID, taskID, user.UserID, role, responses, rating); err != nil {
@@ -787,11 +787,11 @@ func (h *Handler) handleSubmitReviewResponse(w http.ResponseWriter, r *http.Requ
 	case "hr":
 		status = performance.ReviewTaskStatusCompleted
 	}
-	if _, err := h.DB.Exec(r.Context(), "UPDATE review_tasks SET status = $1 WHERE tenant_id = $2 AND id = $3", status, user.TenantID, taskID); err != nil {
+	if _, err := h.Service.Exec(r.Context(), "UPDATE review_tasks SET status = $1 WHERE tenant_id = $2 AND id = $3", status, user.TenantID, taskID); err != nil {
 		slog.Warn("review task status update failed", "err", err)
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.review.submit", "review_task", taskID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"role": role}); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.review.submit", "review_task", taskID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"role": role}); err != nil {
 		slog.Warn("audit performance.review.submit failed", "err", err)
 	}
 	api.Created(w, map[string]string{"status": status}, middleware.GetRequestID(r.Context()))
@@ -812,7 +812,7 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 	args := []any{user.TenantID}
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
 			slog.Warn("feedback list employee lookup failed", "err", err)
 		}
 		query += " AND to_employee_id = $2"
@@ -820,7 +820,7 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("feedback list manager lookup failed", "err", err)
 		}
 		query += " AND (to_employee_id IN (SELECT id FROM employees WHERE tenant_id = $1 AND manager_id = $2) OR from_user_id = $3)"
@@ -828,7 +828,7 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	query += " ORDER BY created_at DESC"
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.Service.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "feedback_list_failed", "failed to list feedback", middleware.GetRequestID(r.Context()))
 		return
@@ -880,7 +880,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleEmployee {
 		var selfEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
 			slog.Warn("feedback create self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || payload.ToEmployeeID != selfEmployeeID {
@@ -890,11 +890,11 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("feedback create manager lookup failed", "err", err)
 		}
 		var allowed int
-		if err := h.DB.QueryRow(r.Context(), `
+		if err := h.Service.QueryRow(r.Context(), `
       SELECT COUNT(1)
       FROM employees
       WHERE tenant_id = $1 AND id = $2 AND manager_id = $3
@@ -907,7 +907,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err := h.DB.Exec(r.Context(), `
+	_, err := h.Service.Exec(r.Context(), `
     INSERT INTO feedback (tenant_id, from_user_id, to_employee_id, type, message, related_goal_id)
     VALUES ($1,$2,$3,$4,$5,$6)
   `, user.TenantID, user.UserID, payload.ToEmployeeID, payload.Type, payload.Message, nullIfEmpty(payload.RelatedGoal))
@@ -917,7 +917,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var toUserID string
-	if err := h.DB.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.ToEmployeeID).Scan(&toUserID); err != nil {
+	if err := h.Service.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, payload.ToEmployeeID).Scan(&toUserID); err != nil {
 		slog.Warn("feedback recipient user lookup failed", "err", err)
 	}
 	if toUserID != "" {
@@ -927,7 +927,7 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.feedback.create", "feedback", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.feedback.create", "feedback", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.feedback.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"status": "feedback_created"}, middleware.GetRequestID(r.Context()))
@@ -948,7 +948,7 @@ func (h *Handler) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 	args := []any{user.TenantID}
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
 			slog.Warn("checkin list employee lookup failed", "err", err)
 		}
 		query += " AND employee_id = $2"
@@ -956,7 +956,7 @@ func (h *Handler) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("checkin list manager lookup failed", "err", err)
 		}
 		query += " AND (manager_id = $2 OR employee_id = $2)"
@@ -964,7 +964,7 @@ func (h *Handler) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 	}
 	query += " ORDER BY created_at DESC"
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.Service.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "checkin_list_failed", "failed to list checkins", middleware.GetRequestID(r.Context()))
 		return
@@ -1010,7 +1010,7 @@ func (h *Handler) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if payload.EmployeeID == "" {
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&payload.EmployeeID); err != nil {
 			slog.Warn("checkin create employee lookup failed", "err", err)
 		}
 	}
@@ -1020,7 +1020,7 @@ func (h *Handler) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleEmployee {
 		var selfEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
 			slog.Warn("checkin create self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || payload.EmployeeID != selfEmployeeID {
@@ -1030,11 +1030,11 @@ func (h *Handler) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("checkin create manager lookup failed", "err", err)
 		}
 		var allowed int
-		if err := h.DB.QueryRow(r.Context(), `
+		if err := h.Service.QueryRow(r.Context(), `
       SELECT COUNT(1)
       FROM employees
       WHERE tenant_id = $1 AND id = $2 AND manager_id = $3
@@ -1047,7 +1047,7 @@ func (h *Handler) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err := h.DB.Exec(r.Context(), `
+	_, err := h.Service.Exec(r.Context(), `
     INSERT INTO checkins (tenant_id, employee_id, manager_id, notes, private)
     VALUES ($1,$2,$3,$4,$5)
   `, user.TenantID, payload.EmployeeID, nullIfEmpty(payload.ManagerID), payload.Notes, payload.Private)
@@ -1056,7 +1056,7 @@ func (h *Handler) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.checkin.create", "checkin", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.checkin.create", "checkin", "", middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.checkin.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"status": "checkin_created"}, middleware.GetRequestID(r.Context()))
@@ -1077,7 +1077,7 @@ func (h *Handler) handleListPIPs(w http.ResponseWriter, r *http.Request) {
 	args := []any{user.TenantID}
 	if user.RoleName == auth.RoleEmployee {
 		var employeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
 			slog.Warn("pip list employee lookup failed", "err", err)
 		}
 		query += " AND employee_id = $2"
@@ -1085,7 +1085,7 @@ func (h *Handler) handleListPIPs(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("pip list manager lookup failed", "err", err)
 		}
 		query += " AND (manager_id = $2 OR employee_id = $2)"
@@ -1093,7 +1093,7 @@ func (h *Handler) handleListPIPs(w http.ResponseWriter, r *http.Request) {
 	}
 	query += " ORDER BY created_at DESC"
 
-	rows, err := h.DB.Query(r.Context(), query, args...)
+	rows, err := h.Service.Query(r.Context(), query, args...)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "pip_list_failed", "failed to list pips", middleware.GetRequestID(r.Context()))
 		return
@@ -1182,11 +1182,11 @@ func (h *Handler) handleCreatePIP(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("pip create manager lookup failed", "err", err)
 		}
 		var allowed int
-		if err := h.DB.QueryRow(r.Context(), `
+		if err := h.Service.QueryRow(r.Context(), `
       SELECT COUNT(1)
       FROM employees
       WHERE tenant_id = $1 AND id = $2 AND manager_id = $3
@@ -1201,7 +1201,7 @@ func (h *Handler) handleCreatePIP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id string
-	if err := h.DB.QueryRow(r.Context(), `
+	if err := h.Service.QueryRow(r.Context(), `
     INSERT INTO pips (tenant_id, employee_id, manager_id, hr_owner_id, objectives_json, milestones_json, review_dates_json, status)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
     RETURNING id
@@ -1210,7 +1210,7 @@ func (h *Handler) handleCreatePIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.pip.create", "pip", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.pip.create", "pip", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.pip.create failed", "err", err)
 	}
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
@@ -1225,7 +1225,7 @@ func (h *Handler) handleUpdatePIP(w http.ResponseWriter, r *http.Request) {
 
 	pipID := chi.URLParam(r, "pipID")
 	var employeeID, managerID string
-	err := h.DB.QueryRow(r.Context(), `
+	err := h.Service.QueryRow(r.Context(), `
     SELECT employee_id, manager_id
     FROM pips
     WHERE tenant_id = $1 AND id = $2
@@ -1237,7 +1237,7 @@ func (h *Handler) handleUpdatePIP(w http.ResponseWriter, r *http.Request) {
 
 	if user.RoleName == auth.RoleManager {
 		var managerEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("pip update manager lookup failed", "err", err)
 		}
 		if managerEmployeeID == "" || managerEmployeeID != managerID {
@@ -1247,7 +1247,7 @@ func (h *Handler) handleUpdatePIP(w http.ResponseWriter, r *http.Request) {
 	}
 	if user.RoleName == auth.RoleEmployee {
 		var selfEmployeeID string
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
 			slog.Warn("pip update self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || selfEmployeeID != employeeID {
@@ -1292,7 +1292,7 @@ func (h *Handler) handleUpdatePIP(w http.ResponseWriter, r *http.Request) {
 		reviewDatesJSON = encoded
 	}
 
-	if _, err := h.DB.Exec(r.Context(), `
+	if _, err := h.Service.Exec(r.Context(), `
     UPDATE pips
     SET status = COALESCE(NULLIF($1,''), status),
         objectives_json = COALESCE($2, objectives_json),
@@ -1305,7 +1305,7 @@ func (h *Handler) handleUpdatePIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := audit.New(h.DB).Record(r.Context(), user.TenantID, user.UserID, "performance.pip.update", "pip", pipID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "performance.pip.update", "pip", pipID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
 		slog.Warn("audit performance.pip.update failed", "err", err)
 	}
 	api.Success(w, map[string]string{"id": pipID}, middleware.GetRequestID(r.Context()))
@@ -1324,7 +1324,7 @@ func (h *Handler) handlePerformanceSummary(w http.ResponseWriter, r *http.Reques
 
 	managerEmployeeID := ""
 	if user.RoleName == auth.RoleManager {
-		if err := h.DB.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
+		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&managerEmployeeID); err != nil {
 			slog.Warn("performance summary manager lookup failed", "err", err)
 		}
 	}
@@ -1344,7 +1344,7 @@ func (h *Handler) handlePerformanceSummary(w http.ResponseWriter, r *http.Reques
     WHERE tenant_id = $1%s`, statusPos, goalFilter)
 
 	var goalsTotal, goalsCompleted int
-	if err := h.DB.QueryRow(r.Context(), goalQuery, goalArgs...).Scan(&goalsTotal, &goalsCompleted); err != nil {
+	if err := h.Service.QueryRow(r.Context(), goalQuery, goalArgs...).Scan(&goalsTotal, &goalsCompleted); err != nil {
 		slog.Warn("performance summary goals query failed", "err", err)
 	}
 
@@ -1363,7 +1363,7 @@ func (h *Handler) handlePerformanceSummary(w http.ResponseWriter, r *http.Reques
     WHERE tenant_id = $1%s`, statusStart, taskFilter)
 
 	var tasksTotal, tasksCompleted int
-	if err := h.DB.QueryRow(r.Context(), taskQuery, taskArgs...).Scan(&tasksTotal, &tasksCompleted); err != nil {
+	if err := h.Service.QueryRow(r.Context(), taskQuery, taskArgs...).Scan(&tasksTotal, &tasksCompleted); err != nil {
 		slog.Warn("performance summary tasks query failed", "err", err)
 	}
 
@@ -1379,7 +1379,7 @@ func (h *Handler) handlePerformanceSummary(w http.ResponseWriter, r *http.Reques
     FROM review_responses rr
     JOIN review_tasks rt ON rr.task_id = rt.id
     WHERE rr.tenant_id = $1 AND rr.rating IS NOT NULL` + responseFilter
-	rows, err := h.DB.Query(r.Context(), query, responseArgs...)
+	rows, err := h.Service.Query(r.Context(), query, responseArgs...)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

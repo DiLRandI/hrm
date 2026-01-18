@@ -11,8 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"hrm/internal/domain/audit"
+	authdomain "hrm/internal/domain/auth"
 	"hrm/internal/domain/core"
+	"hrm/internal/domain/gdpr"
+	"hrm/internal/domain/leave"
 	"hrm/internal/domain/notifications"
+	"hrm/internal/domain/payroll"
+	"hrm/internal/domain/performance"
+	"hrm/internal/domain/reports"
 	"hrm/internal/platform/config"
 	cryptoutil "hrm/internal/platform/crypto"
 	"hrm/internal/platform/db"
@@ -162,7 +168,8 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
-		authHandler := authhandler.NewHandler(pool, cfg.JWTSecret, cryptoSvc)
+		authService := authdomain.NewService(authdomain.NewStore(pool))
+		authHandler := authhandler.NewHandler(authService, cfg.JWTSecret, cryptoSvc)
 		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/login", authHandler.HandleLogin)
 		r.Post("/auth/logout", authHandler.HandleLogout)
 		r.Post("/auth/refresh", authHandler.HandleRefresh)
@@ -172,25 +179,32 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 		r.Post("/auth/mfa/enable", authHandler.HandleMFAEnable)
 		r.Post("/auth/mfa/disable", authHandler.HandleMFADisable)
 
-		coreHandler := corehandler.NewHandler(coreStore)
+		auditSvc := audit.New(pool)
+		coreService := core.NewService(coreStore)
+		coreHandler := corehandler.NewHandler(coreService, auditSvc)
 		coreHandler.RegisterRoutes(r)
 
-		auditHandler := audithandler.NewHandler(audit.New(pool), coreStore)
+		auditHandler := audithandler.NewHandler(auditSvc, coreStore)
 		auditHandler.RegisterRoutes(r)
 
-		leaveHandler := leavehandler.NewHandler(pool, coreStore, notifySvc, jobsSvc)
+		leaveService := leave.NewService(leave.NewStore(pool), coreStore)
+		leaveHandler := leavehandler.NewHandler(leaveService, coreStore, notifySvc, auditSvc, jobsSvc)
 		leaveHandler.RegisterRoutes(r)
 
-		payrollHandler := payrollhandler.NewHandler(pool, coreStore, cryptoSvc, notifySvc, jobsSvc)
+		payrollService := payroll.NewService(payroll.NewStore(pool), cryptoSvc)
+		payrollHandler := payrollhandler.NewHandler(payrollService, coreStore, cryptoSvc, notifySvc, jobsSvc, auditSvc)
 		payrollHandler.RegisterRoutes(r)
 
-		performanceHandler := performancehandler.NewHandler(pool, coreStore, notifySvc)
+		performanceService := performance.NewService(performance.NewStore(pool))
+		performanceHandler := performancehandler.NewHandler(performanceService, coreStore, notifySvc, auditSvc)
 		performanceHandler.RegisterRoutes(r)
 
-		gdprHandler := gdprhandler.NewHandler(pool, coreStore, cryptoSvc, jobsSvc)
+		gdprService := gdpr.NewService(gdpr.NewStore(pool))
+		gdprHandler := gdprhandler.NewHandler(gdprService, coreStore, cryptoSvc, jobsSvc, auditSvc)
 		gdprHandler.RegisterRoutes(r)
 
-		reportsHandler := reportshandler.NewHandler(pool, coreStore)
+		reportsService := reports.NewService(reports.NewStore(pool))
+		reportsHandler := reportshandler.NewHandler(reportsService, coreStore)
 		reportsHandler.RegisterRoutes(r)
 
 		notificationsHandler := notificationshandler.NewHandler(notifySvc)
