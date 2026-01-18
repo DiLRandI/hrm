@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth.jsx';
 
 export default function Login() {
@@ -51,6 +51,9 @@ export default function Login() {
           {error && <div className="error">{error}</div>}
           <button type="submit" disabled={loading}>{loading ? 'Signing in...' : 'Sign in'}</button>
         </form>
+        <div className="auth-links">
+          <Link to="/reset-request">Forgot password?</Link>
+        </div>
       </div>
     </div>
   );

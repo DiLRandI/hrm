@@ -2,6 +2,8 @@ import React from 'react';
 import { Routes, Route, Navigate, NavLink } from 'react-router-dom';
 import { AuthProvider, useAuth } from '../features/auth/auth.jsx';
 import Login from '../features/auth/pages/Login.jsx';
+import RequestReset from '../features/auth/pages/RequestReset.jsx';
+import ResetPassword from '../features/auth/pages/ResetPassword.jsx';
 import Dashboard from '../features/core/pages/Dashboard.jsx';
 import Employees from '../features/core/pages/Employees.jsx';
 import Leave from '../features/leave/pages/Leave.jsx';
@@ -48,24 +50,26 @@ function AppShell() {
         <button className="ghost" onClick={logout}>Log out</button>
       </aside>
       <main className="content">
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/employees" element={<Employees />} />
-          <Route path="/leave" element={<Leave />} />
-          <Route path="/payroll" element={<Payroll />} />
-          <Route path="/performance" element={<Performance />} />
-          <Route path="/gdpr" element={<GDPR />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/notifications" element={<Notifications />} />
-          <Route
-            path="/audit"
-            element={
-              <RequireRole allowed={[ROLE_HR]}>
-                <Audit />
-              </RequireRole>
-            }
-          />
-        </Routes>
+        <div className="content-inner">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/employees" element={<Employees />} />
+            <Route path="/leave" element={<Leave />} />
+            <Route path="/payroll" element={<Payroll />} />
+            <Route path="/performance" element={<Performance />} />
+            <Route path="/gdpr" element={<GDPR />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/notifications" element={<Notifications />} />
+            <Route
+              path="/audit"
+              element={
+                <RequireRole allowed={[ROLE_HR]}>
+                  <Audit />
+                </RequireRole>
+              }
+            />
+          </Routes>
+        </div>
       </main>
     </div>
   );
@@ -77,6 +81,8 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/reset-request" element={<RequestReset />} />
+          <Route path="/reset" element={<ResetPassword />} />
           <Route path="/*" element={<AppShell />} />
         </Routes>
       </AuthProvider>

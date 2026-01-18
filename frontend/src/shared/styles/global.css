@@ -1,16 +1,27 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600;700&family=Fraunces:wght@400;600&display=swap');
 
 :root {
-  --bg: #0f1616;
-  --bg-accent: #142428;
-  --surface: #1a2f2c;
-  --surface-soft: #223a36;
-  --ink: #f2f6f0;
-  --ink-muted: #b7c6c1;
-  --accent: #f4a261;
-  --accent-2: #2a9d8f;
-  --danger: #ff6b6b;
-  --shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  --bg: #f7f3ea;
+  --bg-accent: #f2e9dc;
+  --surface: #ffffff;
+  --surface-soft: #f3efe6;
+  --ink: #1e2a2a;
+  --ink-muted: #5e6a6d;
+  --accent: #e07a5f;
+  --accent-2: #3d8b7d;
+  --danger: #d64545;
+  --shadow: 0 16px 36px rgba(33, 24, 12, 0.12);
+  --radius-lg: 18px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 48px;
 }
 
 * {
@@ -21,8 +32,10 @@ body {
   margin: 0;
   font-family: 'Space Grotesk', sans-serif;
   color: var(--ink);
-  background: radial-gradient(circle at top, #1b2f35 0%, #0f1616 40%, #0b1111 100%);
+  background:
+    radial-gradient(circle at top, #fff7e6 0%, #f7f3ea 45%, #efe7da 100%);
   min-height: 100vh;
+  line-height: 1.5;
 }
 
 a {
@@ -32,22 +45,24 @@ a {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 240px 1fr;
   min-height: 100vh;
+  gap: 0;
 }
 
 .sidebar {
-  padding: 32px 24px;
-  background: linear-gradient(160deg, #101f20 0%, #0c1414 100%);
+  padding: var(--space-7) var(--space-5);
+  background: linear-gradient(160deg, #fdf8ee 0%, #f2e6d4 100%);
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-5);
+  border-right: 1px solid rgba(30, 42, 42, 0.08);
 }
 
 .brand {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-1);
   font-family: 'Fraunces', serif;
   font-size: 24px;
 }
@@ -63,19 +78,20 @@ a {
 .sidebar nav {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .sidebar nav a {
-  padding: 10px 14px;
-  border-radius: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
   color: var(--ink-muted);
   transition: all 0.2s ease;
+  font-size: 14px;
 }
 
 .sidebar nav a.active,
 .sidebar nav a:hover {
-  background: var(--surface);
+  background: rgba(224, 122, 95, 0.12);
   color: var(--ink);
 }
 
@@ -87,13 +103,14 @@ select {
 
 button {
   background: var(--accent);
-  color: #1a1a1a;
+  color: #1f1f1f;
   border: none;
-  padding: 10px 16px;
-  border-radius: 12px;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-weight: 600;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  min-height: 44px;
 }
 
 button:hover {
@@ -104,23 +121,33 @@ button:hover {
 button.ghost {
   background: transparent;
   color: var(--ink-muted);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(30, 42, 42, 0.15);
 }
 
 .content {
-  padding: 32px 40px;
+  padding: var(--space-7) var(--space-7) var(--space-7) var(--space-8);
+}
+
+.content-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
 }
 
 .page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-6);
 }
 
 .page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .page-header h2 {
@@ -129,21 +156,22 @@ button.ghost {
 }
 
 .page-header p {
-  margin: 6px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--ink-muted);
 }
 
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
+  gap: var(--space-4);
 }
 
 .card {
   background: var(--surface);
-  padding: 20px;
-  border-radius: 16px;
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
+  border: 1px solid rgba(30, 42, 42, 0.06);
 }
 
 .card h3 {
@@ -162,38 +190,41 @@ button.ghost {
 .inline-form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
   background: var(--surface-soft);
-  padding: 16px;
-  border-radius: 16px;
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
 }
 
 .stack {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .inline-form input,
 .inline-form select {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #fffaf1;
+  border: 1px solid rgba(30, 42, 42, 0.12);
   color: var(--ink);
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
+  min-height: 44px;
 }
 
 .table {
   background: var(--surface);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
   box-shadow: var(--shadow);
+  border: 1px solid rgba(30, 42, 42, 0.06);
 }
 
 .table-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  padding: 12px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 14px 18px;
+  border-bottom: 1px solid rgba(30, 42, 42, 0.06);
+  align-items: center;
 }
 
 .table-row.header {
@@ -201,11 +232,12 @@ button.ghost {
   font-size: 12px;
   letter-spacing: 1px;
   color: var(--ink-muted);
+  background: var(--surface-soft);
 }
 
 .row-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .pagination {
@@ -216,18 +248,18 @@ button.ghost {
 .checkbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   color: var(--ink-muted);
 }
 
 .checkbox-grid {
-  margin: 12px 0;
+  margin: var(--space-3) 0;
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 8px;
+  gap: var(--space-2);
   background: var(--surface-soft);
-  padding: 12px;
-  border-radius: 12px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
 }
 
 .inline-note {
@@ -241,41 +273,41 @@ button.ghost {
 }
 
 .error {
-  background: rgba(255, 107, 107, 0.15);
-  border: 1px solid rgba(255, 107, 107, 0.4);
-  padding: 12px 16px;
-  border-radius: 12px;
+  background: rgba(214, 69, 69, 0.12);
+  border: 1px solid rgba(214, 69, 69, 0.35);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
   color: var(--danger);
 }
 
 .success {
-  background: rgba(42, 157, 143, 0.15);
-  border: 1px solid rgba(42, 157, 143, 0.35);
-  padding: 12px 16px;
-  border-radius: 12px;
+  background: rgba(61, 139, 125, 0.12);
+  border: 1px solid rgba(61, 139, 125, 0.3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
   color: var(--accent-2);
 }
 
 .status-tag {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   padding: 4px 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(30, 42, 42, 0.08);
   color: var(--ink-muted);
   font-size: 12px;
 }
 
 .status-tag.success {
-  background: rgba(42, 157, 143, 0.2);
+  background: rgba(61, 139, 125, 0.2);
   color: var(--accent-2);
 }
 
 .code-block {
-  background: rgba(0, 0, 0, 0.3);
-  padding: 12px;
-  border-radius: 12px;
+  background: rgba(30, 42, 42, 0.08);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
   font-size: 12px;
   overflow-x: auto;
 }
@@ -284,17 +316,18 @@ button.ghost {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: var(--space-6);
 }
 
 .login-card {
   width: min(420px, 90vw);
   background: var(--surface);
-  padding: 32px;
-  border-radius: 24px;
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   display: grid;
-  gap: 16px;
+  gap: var(--space-4);
+  border: 1px solid rgba(30, 42, 42, 0.06);
 }
 
 .login-card h1 {
@@ -304,39 +337,57 @@ button.ghost {
 
 .login-card form {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .login-card label {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1);
   color: var(--ink-muted);
+  font-size: 14px;
 }
 
 .login-card input {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: #fffaf1;
+  border: 1px solid rgba(30, 42, 42, 0.12);
   color: var(--ink);
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-sm);
+  min-height: 44px;
+}
+
+.auth-links {
+  display: flex;
+  justify-content: flex-end;
+  font-size: 13px;
+}
+
+.auth-links a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.auth-links a:hover {
+  text-decoration: underline;
 }
 
 .list {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 
 .list-item {
   background: var(--surface);
-  padding: 16px;
-  border-radius: 16px;
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  border: 1px solid rgba(30, 42, 42, 0.06);
 }
 
 .page-loading {
-  padding: 40px;
+  padding: var(--space-7);
   color: var(--ink-muted);
   font-size: 16px;
 }
@@ -346,28 +397,29 @@ button.ghost {
   top: 24px;
   right: 24px;
   display: grid;
-  gap: 10px;
+  gap: var(--space-2);
   z-index: 2000;
 }
 
 .toast {
-  background: #1c2a2a;
+  background: #fff3e4;
   color: var(--ink);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 12px 14px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   box-shadow: var(--shadow);
   min-width: 220px;
+  border: 1px solid rgba(30, 42, 42, 0.06);
 }
 
 .toast--error {
-  background: rgba(127, 29, 29, 0.92);
+  background: rgba(214, 69, 69, 0.12);
 }
 
 .toast--success {
-  background: rgba(6, 95, 70, 0.92);
+  background: rgba(61, 139, 125, 0.12);
 }
 
 .toast-close {
@@ -395,6 +447,7 @@ button.ghost {
   .sidebar {
     flex-direction: row;
     overflow-x: auto;
+    padding: var(--space-4);
   }
 
   .sidebar nav {
@@ -403,6 +456,10 @@ button.ghost {
   }
 
   .content {
-    padding: 24px;
+    padding: var(--space-5);
+  }
+
+  .content-inner {
+    gap: var(--space-5);
   }
 }
