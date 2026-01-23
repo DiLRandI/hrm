@@ -4,39 +4,24 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"hrm/internal/domain/core"
+	cryptoutil "hrm/internal/platform/crypto"
 )
 
+type EmployeeStore interface {
+	GetEmployee(ctx context.Context, tenantID, employeeID string) (*core.Employee, error)
+}
+
 type Service struct {
-	Store *Store
+	store     *Store
+	employees EmployeeStore
+	crypto    *cryptoutil.Service
 }
 
-func NewService(store *Store) *Service {
-	return &Service{Store: store}
-}
-
-func (s *Service) Pool() *pgxpool.Pool {
-	return s.Store.DB
-}
-
-func (s *Service) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	return s.Store.DB.Query(ctx, sql, args...)
-}
-
-func (s *Service) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return s.Store.DB.QueryRow(ctx, sql, args...)
-}
-
-func (s *Service) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return s.Store.DB.Exec(ctx, sql, args...)
-}
-
-func (s *Service) Begin(ctx context.Context) (pgx.Tx, error) {
-	return s.Store.DB.Begin(ctx)
+func NewService(store *Store, employees EmployeeStore, crypto *cryptoutil.Service) *Service {
+	return &Service{store: store, employees: employees, crypto: crypto}
 }
 
 func (s *Service) ApplyRetention(ctx context.Context, tenantID, category string, cutoff time.Time) (int64, error) {
-	return ApplyRetention(ctx, s.Store.DB, tenantID, category, cutoff)
+	return ApplyRetention(ctx, s.store.DB, tenantID, category, cutoff)
 }

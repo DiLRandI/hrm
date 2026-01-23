@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jung-kurt/gofpdf"
 
@@ -16,39 +14,23 @@ import (
 )
 
 type Service struct {
-	Store  *Store
-	Crypto *cryptoutil.Service
+	store  *Store
+	crypto *cryptoutil.Service
 }
 
 func NewService(store *Store, crypto *cryptoutil.Service) *Service {
-	return &Service{Store: store, Crypto: crypto}
+	return &Service{store: store, crypto: crypto}
 }
 
 func (s *Service) Pool() *pgxpool.Pool {
-	return s.Store.DB
-}
-
-func (s *Service) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-	return s.Store.DB.Query(ctx, sql, args...)
-}
-
-func (s *Service) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return s.Store.DB.QueryRow(ctx, sql, args...)
-}
-
-func (s *Service) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	return s.Store.DB.Exec(ctx, sql, args...)
-}
-
-func (s *Service) Begin(ctx context.Context) (pgx.Tx, error) {
-	return s.Store.DB.Begin(ctx)
+	return s.store.DB
 }
 
 func (s *Service) GeneratePayslipPDF(ctx context.Context, tenantID, periodID, employeeID, payslipID string) (string, error) {
 	var firstName, lastName, email, currency string
 	var gross, deductions, net float64
 	var startDate, endDate time.Time
-	err := s.Store.DB.QueryRow(ctx, `
+	err := s.store.DB.QueryRow(ctx, `
     SELECT e.first_name, e.last_name, e.email,
            r.gross, r.deductions, r.net, r.currency,
            p.start_date, p.end_date
@@ -88,12 +70,12 @@ func (s *Service) GeneratePayslipPDF(ctx context.Context, tenantID, periodID, em
 		return "", err
 	}
 
-	if s.Crypto != nil && s.Crypto.Configured() {
+	if s.crypto != nil && s.crypto.Configured() {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return "", err
 		}
-		encrypted, err := s.Crypto.Encrypt(data)
+		encrypted, err := s.crypto.Encrypt(data)
 		if err != nil {
 			return "", err
 		}

@@ -31,23 +31,23 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/me", h.handleMe)
 	r.Get("/org/chart", h.handleOrgChart)
 	r.Route("/employees", func(r chi.Router) {
-		r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service.Store)).Get("/", h.handleListEmployees)
-		r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Service.Store)).Post("/", h.handleCreateEmployee)
+		r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/", h.handleListEmployees)
+		r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Service)).Post("/", h.handleCreateEmployee)
 		r.Route("/{employeeID}", func(r chi.Router) {
-			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service.Store)).Get("/", h.handleGetEmployee)
+			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/", h.handleGetEmployee)
 			r.Put("/", h.handleUpdateEmployee)
-			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service.Store)).Get("/manager-history", h.handleManagerHistory)
+			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/manager-history", h.handleManagerHistory)
 		})
 	})
 	r.Route("/departments", func(r chi.Router) {
-		r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service.Store)).Get("/", h.handleListDepartments)
-		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service.Store)).Post("/", h.handleCreateDepartment)
-		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service.Store)).Put("/{departmentID}", h.handleUpdateDepartment)
-		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service.Store)).Delete("/{departmentID}", h.handleDeleteDepartment)
+		r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service)).Get("/", h.handleListDepartments)
+		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service)).Post("/", h.handleCreateDepartment)
+		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service)).Put("/{departmentID}", h.handleUpdateDepartment)
+		r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service)).Delete("/{departmentID}", h.handleDeleteDepartment)
 	})
-	r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service.Store)).Get("/permissions", h.handleListPermissions)
-	r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service.Store)).Get("/roles", h.handleListRoles)
-	r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service.Store)).Put("/roles/{roleID}", h.handleUpdateRolePermissions)
+	r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service)).Get("/permissions", h.handleListPermissions)
+	r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service)).Get("/roles", h.handleListRoles)
+	r.With(middleware.RequirePermission(auth.PermOrgWrite, h.Service)).Put("/roles/{roleID}", h.handleUpdateRolePermissions)
 }
 
 func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -57,13 +57,13 @@ func (h *Handler) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exists, err := h.Service.Store.UserExists(r.Context(), user.TenantID, user.UserID)
+	exists, err := h.Service.UserExists(r.Context(), user.TenantID, user.UserID)
 	if err != nil || !exists {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	emp, err := h.Service.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+	emp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 	if err == nil {
 		isSelf := true
 		core.FilterEmployeeFields(emp, user, isSelf, false)
@@ -93,7 +93,7 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employees, err := h.Service.Store.ListEmployees(r.Context(), user.TenantID)
+	employees, err := h.Service.ListEmployees(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "employee_list_failed", "failed to list employees", middleware.GetRequestID(r.Context()))
 		return
@@ -101,7 +101,7 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 
 	var managerEmployeeID string
 	if user.RoleName == auth.RoleManager {
-		managerEmp, err := h.Service.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+		managerEmp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 		if err == nil {
 			managerEmployeeID = managerEmp.ID
 		}
@@ -138,7 +138,7 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	employeeID := chi.URLParam(r, "employeeID")
-	emp, err := h.Service.Store.GetEmployee(r.Context(), user.TenantID, employeeID)
+	emp, err := h.Service.GetEmployee(r.Context(), user.TenantID, employeeID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
 		return
@@ -148,7 +148,7 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("access log insert failed", "err", err)
 	}
 
-	managerEmp, err := h.Service.Store.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+	managerEmp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
 	if err != nil {
 		slog.Warn("manager lookup failed", "err", err)
 	}
@@ -187,7 +187,7 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 		payload.Status = core.EmployeeStatusActive
 	}
 
-	id, err := h.Service.Store.CreateEmployee(r.Context(), user.TenantID, payload)
+	id, err := h.Service.CreateEmployee(r.Context(), user.TenantID, payload)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -219,7 +219,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	employeeID := chi.URLParam(r, "employeeID")
-	existing, err := h.Service.Store.GetEmployee(r.Context(), user.TenantID, employeeID)
+	existing, err := h.Service.GetEmployee(r.Context(), user.TenantID, employeeID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
 		return
@@ -254,7 +254,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		payload.Status = existing.Status
 	}
 
-	if err := h.Service.Store.UpdateEmployee(r.Context(), user.TenantID, employeeID, payload); err != nil {
+	if err := h.Service.UpdateEmployee(r.Context(), user.TenantID, employeeID, payload); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "employee_update_failed", "failed to update employee", middleware.GetRequestID(r.Context()))
 		return
 	}

@@ -12,7 +12,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -32,62 +31,14 @@ import (
 type Handler struct {
 	Service *payroll.Service
 	Perms   middleware.PermissionStore
-	Store   *core.Store
 	Crypto  *cryptoutil.Service
 	Notify  *notifications.Service
 	Jobs    *jobs.Service
 	Audit   *audit.Service
 }
 
-func NewHandler(service *payroll.Service, store *core.Store, crypto *cryptoutil.Service, notify *notifications.Service, jobsSvc *jobs.Service, auditSvc *audit.Service) *Handler {
-	return &Handler{Service: service, Perms: store, Store: store, Crypto: crypto, Notify: notify, Jobs: jobsSvc, Audit: auditSvc}
-}
-
-type PaySchedule struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Frequency string    `json:"frequency"`
-	PayDay    int       `json:"payDay"`
-	CreatedAt time.Time `json:"createdAt"`
-}
-
-type PayGroup struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	ScheduleID string `json:"scheduleId"`
-	Currency   string `json:"currency"`
-}
-
-type PayElement struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	ElementType string  `json:"elementType"`
-	CalcType    string  `json:"calcType"`
-	Amount      float64 `json:"amount"`
-	Taxable     bool    `json:"taxable"`
-}
-
-type JournalTemplate struct {
-	ID     string         `json:"id"`
-	Name   string         `json:"name"`
-	Config map[string]any `json:"config"`
-}
-
-type PayrollPeriod struct {
-	ID         string    `json:"id"`
-	ScheduleID string    `json:"scheduleId"`
-	StartDate  time.Time `json:"startDate"`
-	EndDate    time.Time `json:"endDate"`
-	Status     string    `json:"status"`
-}
-
-type PayrollAdjustment struct {
-	ID            string    `json:"id"`
-	EmployeeID    string    `json:"employeeId"`
-	Description   string    `json:"description"`
-	Amount        float64   `json:"amount"`
-	EffectiveDate string    `json:"effectiveDate,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+func NewHandler(service *payroll.Service, perms middleware.PermissionStore, crypto *cryptoutil.Service, notify *notifications.Service, jobsSvc *jobs.Service, auditSvc *audit.Service) *Handler {
+	return &Handler{Service: service, Perms: perms, Crypto: crypto, Notify: notify, Jobs: jobsSvc, Audit: auditSvc}
 }
 
 type payrollPeriodPayload struct {
@@ -131,25 +82,10 @@ func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, name, frequency, pay_day, created_at
-    FROM pay_schedules
-    WHERE tenant_id = $1
-  `, user.TenantID)
+	schedules, err := h.Service.ListSchedules(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_schedules_failed", "failed to list schedules", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var schedules []PaySchedule
-	for rows.Next() {
-		var s PaySchedule
-		if err := rows.Scan(&s.ID, &s.Name, &s.Frequency, &s.PayDay, &s.CreatedAt); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payroll_schedules_failed", "failed to list schedules", middleware.GetRequestID(r.Context()))
-			return
-		}
-		schedules = append(schedules, s)
 	}
 	api.Success(w, schedules, middleware.GetRequestID(r.Context()))
 }
@@ -165,17 +101,12 @@ func (h *Handler) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload PaySchedule
+	var payload payroll.Schedule
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
-	var id string
-	err := h.Service.QueryRow(r.Context(), `
-    INSERT INTO pay_schedules (tenant_id, name, frequency, pay_day)
-    VALUES ($1,$2,$3,$4)
-    RETURNING id
-  `, user.TenantID, payload.Name, payload.Frequency, payload.PayDay).Scan(&id)
+	id, err := h.Service.CreateSchedule(r.Context(), user.TenantID, payload.Name, payload.Frequency, payload.PayDay)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_schedule_create_failed", "failed to create schedule", middleware.GetRequestID(r.Context()))
 		return
@@ -193,26 +124,10 @@ func (h *Handler) handleListGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, name, COALESCE(schedule_id::text, ''), COALESCE(currency, 'USD')
-    FROM pay_groups
-    WHERE tenant_id = $1
-    ORDER BY name
-  `, user.TenantID)
+	groups, err := h.Service.ListGroups(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_groups_failed", "failed to list pay groups", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var groups []PayGroup
-	for rows.Next() {
-		var g PayGroup
-		if err := rows.Scan(&g.ID, &g.Name, &g.ScheduleID, &g.Currency); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payroll_groups_failed", "failed to list pay groups", middleware.GetRequestID(r.Context()))
-			return
-		}
-		groups = append(groups, g)
 	}
 	api.Success(w, groups, middleware.GetRequestID(r.Context()))
 }
@@ -228,18 +143,13 @@ func (h *Handler) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload PayGroup
+	var payload payroll.Group
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	var id string
-	err := h.Service.QueryRow(r.Context(), `
-    INSERT INTO pay_groups (tenant_id, name, schedule_id, currency)
-    VALUES ($1,$2,$3,$4)
-    RETURNING id
-  `, user.TenantID, payload.Name, nullIfEmpty(payload.ScheduleID), payload.Currency).Scan(&id)
+	id, err := h.Service.CreateGroup(r.Context(), user.TenantID, payload.Name, payload.ScheduleID, payload.Currency)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_group_create_failed", "failed to create pay group", middleware.GetRequestID(r.Context()))
 		return
@@ -256,25 +166,10 @@ func (h *Handler) handleListElements(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, name, element_type, calc_type, amount, taxable
-    FROM pay_elements
-    WHERE tenant_id = $1
-  `, user.TenantID)
+	elements, err := h.Service.ListElements(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_elements_failed", "failed to list elements", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var elements []PayElement
-	for rows.Next() {
-		var e PayElement
-		if err := rows.Scan(&e.ID, &e.Name, &e.ElementType, &e.CalcType, &e.Amount, &e.Taxable); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payroll_elements_failed", "failed to list elements", middleware.GetRequestID(r.Context()))
-			return
-		}
-		elements = append(elements, e)
 	}
 	api.Success(w, elements, middleware.GetRequestID(r.Context()))
 }
@@ -290,18 +185,13 @@ func (h *Handler) handleCreateElement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload PayElement
+	var payload payroll.Element
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	var id string
-	err := h.Service.QueryRow(r.Context(), `
-    INSERT INTO pay_elements (tenant_id, name, element_type, calc_type, amount, taxable)
-    VALUES ($1,$2,$3,$4,$5,$6)
-    RETURNING id
-  `, user.TenantID, payload.Name, payload.ElementType, payload.CalcType, payload.Amount, payload.Taxable).Scan(&id)
+	id, err := h.Service.CreateElement(r.Context(), user.TenantID, payload)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_element_create_failed", "failed to create element", middleware.GetRequestID(r.Context()))
 		return
@@ -320,30 +210,10 @@ func (h *Handler) handleListJournalTemplates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, name, config_json
-    FROM journal_templates
-    WHERE tenant_id = $1
-    ORDER BY name
-  `, user.TenantID)
+	templates, err := h.Service.ListJournalTemplates(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "journal_template_list_failed", "failed to list journal templates", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var templates []JournalTemplate
-	for rows.Next() {
-		var jt JournalTemplate
-		var configJSON []byte
-		if err := rows.Scan(&jt.ID, &jt.Name, &configJSON); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "journal_template_list_failed", "failed to list journal templates", middleware.GetRequestID(r.Context()))
-			return
-		}
-		if err := json.Unmarshal(configJSON, &jt.Config); err != nil {
-			jt.Config = map[string]any{}
-		}
-		templates = append(templates, jt)
 	}
 	api.Success(w, templates, middleware.GetRequestID(r.Context()))
 }
@@ -359,7 +229,7 @@ func (h *Handler) handleCreateJournalTemplate(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	var payload JournalTemplate
+	var payload payroll.JournalTemplate
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
@@ -371,18 +241,8 @@ func (h *Handler) handleCreateJournalTemplate(w http.ResponseWriter, r *http.Req
 	if payload.Config == nil {
 		payload.Config = map[string]any{}
 	}
-	configJSON, err := json.Marshal(payload.Config)
+	id, err := h.Service.CreateJournalTemplate(r.Context(), user.TenantID, payload.Name, payload.Config)
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid config", middleware.GetRequestID(r.Context()))
-		return
-	}
-
-	var id string
-	if err := h.Service.QueryRow(r.Context(), `
-    INSERT INTO journal_templates (tenant_id, name, config_json)
-    VALUES ($1,$2,$3)
-    RETURNING id
-  `, user.TenantID, payload.Name, configJSON).Scan(&id); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "journal_template_create_failed", "failed to create journal template", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -396,31 +256,14 @@ func (h *Handler) handleListPeriods(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page := shared.ParsePagination(r, 100, 500)
-	var total int
-	if err := h.Service.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_periods WHERE tenant_id = $1", user.TenantID).Scan(&total); err != nil {
+	total, err := h.Service.CountPeriods(r.Context(), user.TenantID)
+	if err != nil {
 		slog.Warn("payroll period count failed", "err", err)
 	}
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, schedule_id, start_date, end_date, status
-    FROM payroll_periods
-    WHERE tenant_id = $1
-    ORDER BY start_date DESC
-    LIMIT $2 OFFSET $3
-  `, user.TenantID, page.Limit, page.Offset)
+	periods, err := h.Service.ListPeriods(r.Context(), user.TenantID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_periods_failed", "failed to list periods", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var periods []PayrollPeriod
-	for rows.Next() {
-		var p PayrollPeriod
-		if err := rows.Scan(&p.ID, &p.ScheduleID, &p.StartDate, &p.EndDate, &p.Status); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payroll_periods_failed", "failed to list periods", middleware.GetRequestID(r.Context()))
-			return
-		}
-		periods = append(periods, p)
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, periods, middleware.GetRequestID(r.Context()))
@@ -458,12 +301,7 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id string
-	err = h.Service.QueryRow(r.Context(), `
-    INSERT INTO payroll_periods (tenant_id, schedule_id, start_date, end_date)
-    VALUES ($1,$2,$3,$4)
-    RETURNING id
-  `, user.TenantID, payload.ScheduleID, startDate, endDate).Scan(&id)
+	id, err := h.Service.CreatePeriod(r.Context(), user.TenantID, payload.ScheduleID, startDate, endDate)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_period_create_failed", "failed to create period", middleware.GetRequestID(r.Context()))
 		return
@@ -475,15 +313,6 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
 }
 
-type payrollInput struct {
-	EmployeeID string  `json:"employeeId"`
-	ElementID  string  `json:"elementId"`
-	Units      float64 `json:"units"`
-	Rate       float64 `json:"rate"`
-	Amount     float64 `json:"amount"`
-	Source     string  `json:"source"`
-}
-
 func (h *Handler) handleListInputs(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
@@ -493,31 +322,14 @@ func (h *Handler) handleListInputs(w http.ResponseWriter, r *http.Request) {
 
 	periodID := chi.URLParam(r, "periodID")
 	page := shared.ParsePagination(r, 100, 500)
-	var total int
-	if err := h.Service.QueryRow(r.Context(), "SELECT COUNT(1) FROM payroll_inputs WHERE tenant_id = $1 AND period_id = $2", user.TenantID, periodID).Scan(&total); err != nil {
+	total, err := h.Service.CountInputs(r.Context(), user.TenantID, periodID)
+	if err != nil {
 		slog.Warn("payroll inputs count failed", "err", err)
 	}
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT employee_id, element_id, units, rate, amount, source
-    FROM payroll_inputs
-    WHERE tenant_id = $1 AND period_id = $2
-    ORDER BY created_at DESC
-    LIMIT $3 OFFSET $4
-  `, user.TenantID, periodID, page.Limit, page.Offset)
+	inputs, err := h.Service.ListInputs(r.Context(), user.TenantID, periodID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_inputs_failed", "failed to list inputs", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var inputs []payrollInput
-	for rows.Next() {
-		var input payrollInput
-		if err := rows.Scan(&input.EmployeeID, &input.ElementID, &input.Units, &input.Rate, &input.Amount, &input.Source); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payroll_inputs_failed", "failed to list inputs", middleware.GetRequestID(r.Context()))
-			return
-		}
-		inputs = append(inputs, input)
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, inputs, middleware.GetRequestID(r.Context()))
@@ -535,7 +347,7 @@ func (h *Handler) handleCreateInput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	var payload payrollInput
+	var payload payroll.Input
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
@@ -548,11 +360,7 @@ func (h *Handler) handleCreateInput(w http.ResponseWriter, r *http.Request) {
 		payload.Source = payroll.InputSourceManual
 	}
 
-	_, err := h.Service.Exec(r.Context(), `
-    INSERT INTO payroll_inputs (tenant_id, period_id, employee_id, element_id, units, rate, amount, source)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-  `, user.TenantID, periodID, payload.EmployeeID, payload.ElementID, payload.Units, payload.Rate, payload.Amount, payload.Source)
-	if err != nil {
+	if err := h.Service.CreateInput(r.Context(), user.TenantID, periodID, payload); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_input_failed", "failed to create input", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -572,178 +380,102 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	var periodStatus string
-	var periodStart, periodEnd time.Time
-	var scheduleID string
-	err := h.Service.QueryRow(r.Context(), `
-    SELECT status, start_date, end_date, schedule_id
-    FROM payroll_periods
-    WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, periodID).Scan(&periodStatus, &periodStart, &periodEnd, &scheduleID)
+	periodDetails, err := h.Service.GetPeriodDetails(r.Context(), user.TenantID, periodID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "payroll period not found", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if periodStatus == payroll.PeriodStatusFinalized {
+	if periodDetails.Status == payroll.PeriodStatusFinalized {
 		api.Fail(w, http.StatusBadRequest, "invalid_state", "payroll period already finalized", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	jobID := ""
 	if h.Jobs != nil {
-		if err := h.Service.QueryRow(r.Context(), `
-      INSERT INTO job_runs (tenant_id, job_type, status)
-      VALUES ($1,$2,$3)
-      RETURNING id
-    `, user.TenantID, "payroll_run", "running").Scan(&jobID); err != nil {
+		if id, err := h.Service.CreateJobRun(r.Context(), user.TenantID, "payroll_run"); err != nil {
 			slog.Warn("payroll job run insert failed", "err", err)
+		} else {
+			jobID = id
 		}
 	}
 
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT e.id,
-           e.salary,
-           e.salary_enc,
-           COALESCE(pg.currency, e.currency),
-           COALESCE(e.bank_account, ''),
-           e.bank_account_enc,
-           COALESCE(pg.schedule_id::text, '')
-    FROM employees e
-    LEFT JOIN pay_groups pg ON e.pay_group_id = pg.id
-    WHERE e.tenant_id = $1 AND e.status = $2
-  `, user.TenantID, core.EmployeeStatusActive)
+	employees, err := h.Service.ListActiveEmployeesForRun(r.Context(), user.TenantID, core.EmployeeStatusActive)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to load employees", middleware.GetRequestID(r.Context()))
 		return
 	}
-	defer rows.Close()
-
 	processed := 0
-	for rows.Next() {
-		var employeeID string
-		var salaryPlain *float64
-		var salaryEnc []byte
-		var currency string
-		var bankPlain string
-		var bankEnc []byte
-		var groupScheduleID string
-		if err := rows.Scan(&employeeID, &salaryPlain, &salaryEnc, &currency, &bankPlain, &bankEnc, &groupScheduleID); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to load employees", middleware.GetRequestID(r.Context()))
-			return
-		}
-		if groupScheduleID != "" && groupScheduleID != scheduleID {
+	for _, employee := range employees {
+		employeeID := employee.EmployeeID
+		if employee.GroupScheduleID != "" && employee.GroupScheduleID != periodDetails.ScheduleID {
 			continue
 		}
 
 		salary := 0.0
-		if salaryPlain != nil {
-			salary = *salaryPlain
+		if employee.SalaryPlain != nil {
+			salary = *employee.SalaryPlain
 		}
-		if h.Crypto != nil && h.Crypto.Configured() && len(salaryEnc) > 0 {
-			if decrypted, err := h.Crypto.DecryptString(salaryEnc); err == nil {
+		if h.Crypto != nil && h.Crypto.Configured() && len(employee.SalaryEnc) > 0 {
+			if decrypted, err := h.Crypto.DecryptString(employee.SalaryEnc); err == nil {
 				if parsed, err := strconv.ParseFloat(decrypted, 64); err == nil {
 					salary = parsed
 				}
 			}
 		}
-		bankAccount := bankPlain
-		if h.Crypto != nil && h.Crypto.Configured() && len(bankEnc) > 0 {
-			if decrypted, err := h.Crypto.DecryptString(bankEnc); err == nil {
+		bankAccount := employee.BankPlain
+		if h.Crypto != nil && h.Crypto.Configured() && len(employee.BankEnc) > 0 {
+			if decrypted, err := h.Crypto.DecryptString(employee.BankEnc); err == nil {
 				bankAccount = decrypted
 			}
 		}
 
-		inputRows, err := h.Service.Query(r.Context(), `
-      SELECT pe.element_type, pi.amount
-      FROM payroll_inputs pi
-      JOIN pay_elements pe ON pi.element_id = pe.id
-      WHERE pi.period_id = $1 AND pi.employee_id = $2
-    `, periodID, employeeID)
+		inputs, err := h.Service.ListInputLines(r.Context(), periodID, employeeID)
 		if err != nil {
 			api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to load inputs", middleware.GetRequestID(r.Context()))
 			return
 		}
 
-		var inputs []payroll.InputLine
-		for inputRows.Next() {
-			var etype string
-			var amount float64
-			if err := inputRows.Scan(&etype, &amount); err != nil {
-				inputRows.Close()
-				api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to process inputs", middleware.GetRequestID(r.Context()))
-				return
-			}
-			inputs = append(inputs, payroll.InputLine{Type: etype, Amount: amount})
-		}
-		inputRows.Close()
-
-		adjRows, err := h.Service.Query(r.Context(), `
-      SELECT amount
-      FROM payroll_adjustments
-      WHERE tenant_id = $1 AND period_id = $2 AND employee_id = $3
-        AND (effective_date IS NULL OR (effective_date >= $4 AND effective_date <= $5))
-    `, user.TenantID, periodID, employeeID, periodStart, periodEnd)
+		adjustments, err := h.Service.ListAdjustmentAmounts(r.Context(), user.TenantID, periodID, employeeID, periodDetails.StartDate, periodDetails.EndDate)
 		if err == nil {
-			for adjRows.Next() {
-				var amount float64
-				if err := adjRows.Scan(&amount); err != nil {
-					continue
-				}
+			for _, amount := range adjustments {
 				if amount >= 0 {
 					inputs = append(inputs, payroll.InputLine{Type: payroll.ElementTypeEarning, Amount: amount})
 				} else {
 					inputs = append(inputs, payroll.InputLine{Type: payroll.ElementTypeDeduction, Amount: -amount})
 				}
 			}
-			adjRows.Close()
 		}
 
 		var unpaidDays float64
-		leaveRows, err := h.Service.Query(r.Context(), `
-      SELECT lr.start_date, lr.end_date, lr.start_half, lr.end_half
-      FROM leave_requests lr
-      JOIN leave_types lt ON lr.leave_type_id = lt.id
-      WHERE lr.tenant_id = $1
-        AND lr.employee_id = $2
-        AND lr.status = $3
-        AND lt.is_paid = false
-        AND lr.start_date <= $4
-        AND lr.end_date >= $5
-    `, user.TenantID, employeeID, leave.StatusApproved, periodEnd, periodStart)
+		leaveWindows, err := h.Service.ListUnpaidLeaves(r.Context(), user.TenantID, employeeID, periodDetails.StartDate, periodDetails.EndDate, leave.StatusApproved)
 		if err == nil {
-			for leaveRows.Next() {
-				var startDate, endDate time.Time
-				var startHalf, endHalf bool
-				if err := leaveRows.Scan(&startDate, &endDate, &startHalf, &endHalf); err != nil {
-					continue
+			for _, leaveWindow := range leaveWindows {
+				overlapStart := leaveWindow.StartDate
+				if periodDetails.StartDate.After(overlapStart) {
+					overlapStart = periodDetails.StartDate
 				}
-				overlapStart := startDate
-				if periodStart.After(overlapStart) {
-					overlapStart = periodStart
-				}
-				overlapEnd := endDate
-				if periodEnd.Before(overlapEnd) {
-					overlapEnd = periodEnd
+				overlapEnd := leaveWindow.EndDate
+				if periodDetails.EndDate.Before(overlapEnd) {
+					overlapEnd = periodDetails.EndDate
 				}
 				days, err := leave.CalculateDays(overlapStart, overlapEnd)
 				if err != nil {
 					continue
 				}
-				if startHalf && overlapStart.Equal(startDate) {
+				if leaveWindow.StartHalf && overlapStart.Equal(leaveWindow.StartDate) {
 					days -= 0.5
 				}
-				if endHalf && overlapEnd.Equal(endDate) {
+				if leaveWindow.EndHalf && overlapEnd.Equal(leaveWindow.EndDate) {
 					days -= 0.5
 				}
 				if days > 0 {
 					unpaidDays += days
 				}
 			}
-			leaveRows.Close()
 		}
 
 		if unpaidDays > 0 && salary > 0 {
-			periodDays, err := leave.CalculateDays(periodStart, periodEnd)
+			periodDays, err := leave.CalculateDays(periodDetails.StartDate, periodDetails.EndDate)
 			if err == nil && periodDays > 0 {
 				deduction := (salary / periodDays) * unpaidDays
 				if deduction > 0 {
@@ -761,14 +493,8 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 		if net < 0 {
 			warnings = append(warnings, payroll.WarningNegativeNet)
 		}
-		var previousNet float64
-		if err := h.Service.QueryRow(r.Context(), `
-      SELECT net
-      FROM payroll_results
-      WHERE tenant_id = $1 AND employee_id = $2
-      ORDER BY created_at DESC
-      LIMIT 1
-    `, user.TenantID, employeeID).Scan(&previousNet); err != nil {
+		previousNet, err := h.Service.LatestNet(r.Context(), user.TenantID, employeeID)
+		if err != nil {
 			slog.Warn("previous net lookup failed", "err", err)
 		}
 		if previousNet > 0 {
@@ -786,21 +512,14 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 			warningsJSON = []byte("[]")
 		}
 
-		if _, err := h.Service.Exec(r.Context(), `
-      INSERT INTO payroll_results (tenant_id, period_id, employee_id, gross, deductions, net, currency, warnings_json)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-      ON CONFLICT (period_id, employee_id)
-      DO UPDATE SET gross = EXCLUDED.gross, deductions = EXCLUDED.deductions, net = EXCLUDED.net, warnings_json = EXCLUDED.warnings_json
-    `, user.TenantID, periodID, employeeID, gross, deductions, net, currency, warningsJSON); err != nil {
+		if err := h.Service.UpsertPayrollResult(r.Context(), user.TenantID, periodID, employeeID, gross, deductions, net, employee.Currency, warningsJSON); err != nil {
 			api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to persist payroll results", middleware.GetRequestID(r.Context()))
 			return
 		}
 		processed++
 	}
 
-	if _, err := h.Service.Exec(r.Context(), `
-    UPDATE payroll_periods SET status = $1 WHERE id = $2 AND tenant_id = $3
-  `, payroll.PeriodStatusReviewed, periodID, user.TenantID); err != nil {
+	if err := h.Service.UpdatePeriodStatus(r.Context(), user.TenantID, periodID, payroll.PeriodStatusReviewed); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_run_failed", "failed to update payroll period", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -809,18 +528,11 @@ func (h *Handler) handleRunPayroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if jobID != "" {
-		detailsJSON, marshalErr := json.Marshal(map[string]any{
+		details := map[string]any{
 			"processed": processed,
 			"periodId":  periodID,
-		})
-		if marshalErr != nil {
-			slog.Warn("payroll job details marshal failed", "err", marshalErr)
-			detailsJSON = []byte("{}")
 		}
-		if _, err := h.Service.Exec(r.Context(), `
-      UPDATE job_runs SET status = $1, details_json = $2, completed_at = now()
-      WHERE id = $3
-    `, "completed", detailsJSON, jobID); err != nil {
+		if err := h.Service.UpdateJobRun(r.Context(), jobID, "completed", details); err != nil {
 			slog.Warn("payroll job run update failed", "err", err)
 		}
 	}
@@ -840,12 +552,8 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	var currentStatus string
-	if err := h.Service.QueryRow(r.Context(), `
-    SELECT status
-    FROM payroll_periods
-    WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, periodID).Scan(&currentStatus); err != nil {
+	currentStatus, err := h.Service.PeriodStatus(r.Context(), user.TenantID, periodID)
+	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "payroll period not found", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -867,55 +575,34 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	_, err := h.Service.Exec(r.Context(), `
-    UPDATE payroll_periods SET status = $1, finalized_at = now() WHERE id = $2 AND tenant_id = $3
-  `, payroll.PeriodStatusFinalized, periodID, user.TenantID)
-	if err != nil {
+	if err := h.Service.FinalizePeriod(r.Context(), user.TenantID, periodID); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_finalize_failed", "failed to finalize payroll", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	if _, err := h.Service.Exec(r.Context(), `
-    INSERT INTO payslips (tenant_id, period_id, employee_id)
-    SELECT tenant_id, period_id, employee_id
-    FROM payroll_results
-    WHERE period_id = $1
-    ON CONFLICT DO NOTHING
-  `, periodID); err != nil {
+	if err := h.Service.CreatePayslipsForPeriod(r.Context(), periodID); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_finalize_failed", "failed to generate payslips", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT id, employee_id
-    FROM payslips
-    WHERE tenant_id = $1 AND period_id = $2
-  `, user.TenantID, periodID)
+	payslips, err := h.Service.ListPayslipIDs(r.Context(), user.TenantID, periodID)
 	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var payslipID, employeeID string
-			if err := rows.Scan(&payslipID, &employeeID); err != nil {
-				slog.Warn("payslip scan failed", "err", err)
-				continue
-			}
-			fileURL, err := h.Service.GeneratePayslipPDF(r.Context(), user.TenantID, periodID, employeeID, payslipID)
+		for _, payslip := range payslips {
+			fileURL, err := h.Service.GeneratePayslipPDF(r.Context(), user.TenantID, periodID, payslip.EmployeeID, payslip.ID)
 			if err != nil {
 				slog.Warn("payslip pdf generation failed", "err", err)
 			} else if fileURL != "" {
-				if _, err := h.Service.Exec(r.Context(), "UPDATE payslips SET file_url = $1 WHERE id = $2", fileURL, payslipID); err != nil {
+				if err := h.Service.UpdatePayslipFileURL(r.Context(), payslip.ID, fileURL); err != nil {
 					slog.Warn("payslip file url update failed", "err", err)
 				}
 			}
-			var employeeUserID string
-			if err := h.Service.QueryRow(r.Context(), "SELECT user_id FROM employees WHERE tenant_id = $1 AND id = $2", user.TenantID, employeeID).Scan(&employeeUserID); err != nil {
+			employeeUserID, err := h.Service.EmployeeUserID(r.Context(), user.TenantID, payslip.EmployeeID)
+			if err != nil {
 				slog.Warn("payslip employee user lookup failed", "err", err)
 			}
-			if employeeUserID != "" {
-				if h.Notify != nil {
-					if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypePayslipPublished, "Payslip published", "A new payslip is available for download."); err != nil {
-						slog.Warn("payslip notification failed", "err", err)
-					}
+			if employeeUserID != "" && h.Notify != nil {
+				if err := h.Notify.Create(r.Context(), user.TenantID, employeeUserID, notifications.TypePayslipPublished, "Payslip published", "A new payslip is available for download."); err != nil {
+					slog.Warn("payslip notification failed", "err", err)
 				}
 			}
 		}
@@ -951,54 +638,26 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 		employeeID = ""
 	}
 	if employeeID == "" {
-		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if id, err := h.Service.FindEmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err != nil {
 			slog.Warn("payslip list employee lookup failed", "err", err)
+		} else {
+			employeeID = id
 		}
 	}
 	if employeeID == "" {
-		api.Success(w, []map[string]any{}, middleware.GetRequestID(r.Context()))
+		api.Success(w, []payroll.Payslip{}, middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	page := shared.ParsePagination(r, 100, 500)
-	var total int
-	if err := h.Service.QueryRow(r.Context(), "SELECT COUNT(1) FROM payslips WHERE tenant_id = $1 AND employee_id = $2", user.TenantID, employeeID).Scan(&total); err != nil {
+	total, err := h.Service.CountPayslips(r.Context(), user.TenantID, employeeID)
+	if err != nil {
 		slog.Warn("payslip count failed", "err", err)
 	}
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT p.id, p.period_id, p.employee_id, r.gross, r.deductions, r.net, r.currency, p.file_url, p.created_at
-    FROM payslips p
-    JOIN payroll_results r ON p.period_id = r.period_id AND p.employee_id = r.employee_id
-    WHERE p.tenant_id = $1 AND p.employee_id = $2
-    ORDER BY p.created_at DESC
-    LIMIT $3 OFFSET $4
-  `, user.TenantID, employeeID, page.Limit, page.Offset)
+	slips, err := h.Service.ListPayslips(r.Context(), user.TenantID, employeeID, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payslip_list_failed", "failed to list payslips", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var slips []map[string]any
-	for rows.Next() {
-		var id, periodID, empID, currency, fileURL string
-		var gross, deductions, net float64
-		var created time.Time
-		if err := rows.Scan(&id, &periodID, &empID, &gross, &deductions, &net, &currency, &fileURL, &created); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "payslip_list_failed", "failed to list payslips", middleware.GetRequestID(r.Context()))
-			return
-		}
-		slips = append(slips, map[string]any{
-			"id":         id,
-			"periodId":   periodID,
-			"employeeId": empID,
-			"gross":      gross,
-			"deductions": deductions,
-			"net":        net,
-			"currency":   currency,
-			"fileUrl":    fileURL,
-			"createdAt":  created,
-		})
 	}
 
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
@@ -1068,8 +727,10 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 		employeeID := get(row, "employee_id")
 		if employeeID == "" {
 			if email := get(row, "employee_email"); email != "" {
-				if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND email = $2", user.TenantID, email).Scan(&employeeID); err != nil {
+				if id, err := h.Service.FindEmployeeIDByEmail(r.Context(), user.TenantID, email); err != nil {
 					slog.Warn("import input employee lookup failed", "email", email, "err", err)
+				} else {
+					employeeID = id
 				}
 			}
 		}
@@ -1099,10 +760,14 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 		if employeeID == "" || elementID == "" {
 			continue
 		}
-		if _, err := h.Service.Exec(r.Context(), `
-      INSERT INTO payroll_inputs (tenant_id, period_id, employee_id, element_id, units, rate, amount, source)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-    `, user.TenantID, periodID, employeeID, elementID, units, rate, amount, source); err != nil {
+		if err := h.Service.CreateInput(r.Context(), user.TenantID, periodID, payroll.Input{
+			EmployeeID: employeeID,
+			ElementID:  elementID,
+			Units:      units,
+			Rate:       rate,
+			Amount:     amount,
+			Source:     source,
+		}); err != nil {
 			slog.Warn("import input insert failed", "err", err)
 			continue
 		}
@@ -1132,63 +797,20 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	query := `
-    SELECT id, employee_id, description, amount, effective_date, created_at
-    FROM payroll_adjustments
-    WHERE tenant_id = $1 AND period_id = $2
-  `
-	args := []any{user.TenantID, periodID}
-
+	employeeFilter := ""
 	if user.RoleName == auth.RoleEmployee {
-		var employeeID string
-		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&employeeID); err != nil {
+		if employeeID, err := h.Service.FindEmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err != nil {
 			slog.Warn("adjustments list employee lookup failed", "err", err)
+		} else {
+			employeeFilter = employeeID
 		}
-		query += " AND employee_id = $3"
-		args = append(args, employeeID)
 	}
-	query += " ORDER BY created_at DESC"
 
 	page := shared.ParsePagination(r, 100, 500)
-	countQuery := `
-    SELECT COUNT(1)
-    FROM payroll_adjustments
-    WHERE tenant_id = $1 AND period_id = $2
-  `
-	countArgs := []any{user.TenantID, periodID}
-	if user.RoleName == auth.RoleEmployee {
-		if len(args) == 3 {
-			countQuery += " AND employee_id = $3"
-			countArgs = append(countArgs, args[2])
-		}
-	}
-	var total int
-	if err := h.Service.QueryRow(r.Context(), countQuery, countArgs...).Scan(&total); err != nil {
-		slog.Warn("adjustments count failed", "err", err)
-	}
-
-	query += fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
-	args = append(args, page.Limit, page.Offset)
-
-	rows, err := h.Service.Query(r.Context(), query, args...)
+	adjustments, total, err := h.Service.ListAdjustments(r.Context(), user.TenantID, periodID, employeeFilter, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "adjustments_list_failed", "failed to list adjustments", middleware.GetRequestID(r.Context()))
 		return
-	}
-	defer rows.Close()
-
-	var adjustments []PayrollAdjustment
-	for rows.Next() {
-		var adj PayrollAdjustment
-		var effectiveDate *time.Time
-		if err := rows.Scan(&adj.ID, &adj.EmployeeID, &adj.Description, &adj.Amount, &effectiveDate, &adj.CreatedAt); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "adjustments_list_failed", "failed to list adjustments", middleware.GetRequestID(r.Context()))
-			return
-		}
-		if effectiveDate != nil {
-			adj.EffectiveDate = effectiveDate.Format("2006-01-02")
-		}
-		adjustments = append(adjustments, adj)
 	}
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, adjustments, middleware.GetRequestID(r.Context()))
@@ -1231,12 +853,7 @@ func (h *Handler) handleCreateAdjustment(w http.ResponseWriter, r *http.Request)
 		effectiveDate = parsed
 	}
 
-	var id string
-	err := h.Service.QueryRow(r.Context(), `
-    INSERT INTO payroll_adjustments (tenant_id, period_id, employee_id, description, amount, effective_date)
-    VALUES ($1,$2,$3,$4,$5,$6)
-    RETURNING id
-  `, user.TenantID, periodID, payload.EmployeeID, payload.Description, payload.Amount, effectiveDate).Scan(&id)
+	id, err := h.Service.CreateAdjustment(r.Context(), user.TenantID, periodID, payload.EmployeeID, payload.Description, payload.Amount, effectiveDate)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "adjustment_create_failed", "failed to create adjustment", middleware.GetRequestID(r.Context()))
 		return
@@ -1259,48 +876,11 @@ func (h *Handler) handlePeriodSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	var gross, deductions, net float64
-	var count int
-	if err := h.Service.QueryRow(r.Context(), `
-    SELECT COALESCE(SUM(gross),0), COALESCE(SUM(deductions),0), COALESCE(SUM(net),0), COUNT(1)
-    FROM payroll_results
-    WHERE tenant_id = $1 AND period_id = $2
-  `, user.TenantID, periodID).Scan(&gross, &deductions, &net, &count); err != nil {
+	summary, err := h.Service.PeriodSummary(r.Context(), user.TenantID, periodID)
+	if err != nil {
 		slog.Warn("period summary totals query failed", "err", err)
 	}
-
-	warningCounts := map[string]int{}
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT warnings_json
-    FROM payroll_results
-    WHERE tenant_id = $1 AND period_id = $2
-  `, user.TenantID, periodID)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var raw []byte
-			if err := rows.Scan(&raw); err != nil {
-				slog.Warn("period summary warnings scan failed", "err", err)
-				continue
-			}
-			var warnings []string
-			if err := json.Unmarshal(raw, &warnings); err != nil {
-				slog.Warn("period summary warnings unmarshal failed", "err", err)
-				continue
-			}
-			for _, wKey := range warnings {
-				warningCounts[wKey]++
-			}
-		}
-	}
-
-	api.Success(w, map[string]any{
-		"totalGross":      gross,
-		"totalDeductions": deductions,
-		"totalNet":        net,
-		"employeeCount":   count,
-		"warnings":        warningCounts,
-	}, middleware.GetRequestID(r.Context()))
+	api.Success(w, summary, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleReopenPeriod(w http.ResponseWriter, r *http.Request) {
@@ -1326,12 +906,8 @@ func (h *Handler) handleReopenPeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var currentStatus string
-	if err := h.Service.QueryRow(r.Context(), `
-    SELECT status
-    FROM payroll_periods
-    WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, periodID).Scan(&currentStatus); err != nil {
+	currentStatus, err := h.Service.PeriodStatus(r.Context(), user.TenantID, periodID)
+	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "payroll period not found", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -1340,17 +916,14 @@ func (h *Handler) handleReopenPeriod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.Service.Exec(r.Context(), `
-    UPDATE payroll_periods SET status = $1 WHERE id = $2 AND tenant_id = $3
-  `, payroll.PeriodStatusDraft, periodID, user.TenantID)
-	if err != nil {
+	if err := h.Service.UpdatePeriodStatus(r.Context(), user.TenantID, periodID, payroll.PeriodStatusDraft); err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_reopen_failed", "failed to reopen payroll", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if _, err := h.Service.Exec(r.Context(), "DELETE FROM payroll_results WHERE tenant_id = $1 AND period_id = $2", user.TenantID, periodID); err != nil {
+	if err := h.Service.DeleteResultsForPeriod(r.Context(), user.TenantID, periodID); err != nil {
 		slog.Warn("payroll results delete failed", "err", err)
 	}
-	if _, err := h.Service.Exec(r.Context(), "DELETE FROM payslips WHERE tenant_id = $1 AND period_id = $2", user.TenantID, periodID); err != nil {
+	if err := h.Service.DeletePayslipsForPeriod(r.Context(), user.TenantID, periodID); err != nil {
 		slog.Warn("payslips delete failed", "err", err)
 	}
 
@@ -1368,18 +941,11 @@ func (h *Handler) handleExportRegister(w http.ResponseWriter, r *http.Request) {
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	rows, err := h.Service.Query(r.Context(), `
-    SELECT e.id, e.first_name, e.last_name, r.gross, r.deductions, r.net, r.currency
-    FROM payroll_results r
-    JOIN employees e ON r.employee_id = e.id
-    WHERE r.tenant_id = $1 AND r.period_id = $2
-    ORDER BY e.last_name, e.first_name
-  `, user.TenantID, periodID)
+	rows, err := h.Service.RegisterRows(r.Context(), user.TenantID, periodID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "export_failed", "failed to export register", middleware.GetRequestID(r.Context()))
 		return
 	}
-	defer rows.Close()
 
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=payroll-register.csv")
@@ -1387,14 +953,8 @@ func (h *Handler) handleExportRegister(w http.ResponseWriter, r *http.Request) {
 	if err := writer.Write([]string{"employee_id", "first_name", "last_name", "gross", "deductions", "net", "currency"}); err != nil {
 		slog.Warn("export register header write failed", "err", err)
 	}
-	for rows.Next() {
-		var id, first, last, currency string
-		var gross, deductions, net float64
-		if err := rows.Scan(&id, &first, &last, &gross, &deductions, &net, &currency); err != nil {
-			api.Fail(w, http.StatusInternalServerError, "export_failed", "failed to export register", middleware.GetRequestID(r.Context()))
-			return
-		}
-		if err := writer.Write([]string{id, first, last, fmt.Sprintf("%.2f", gross), fmt.Sprintf("%.2f", deductions), fmt.Sprintf("%.2f", net), currency}); err != nil {
+	for _, row := range rows {
+		if err := writer.Write([]string{row.EmployeeID, row.FirstName, row.LastName, fmt.Sprintf("%.2f", row.Gross), fmt.Sprintf("%.2f", row.Deductions), fmt.Sprintf("%.2f", row.Net), row.Currency}); err != nil {
 			slog.Warn("export register row write failed", "err", err)
 		}
 	}
@@ -1412,12 +972,7 @@ func (h *Handler) handleExportJournal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	var gross, deductions, net float64
-	err := h.Service.QueryRow(r.Context(), `
-    SELECT COALESCE(SUM(gross),0), COALESCE(SUM(deductions),0), COALESCE(SUM(net),0)
-    FROM payroll_results
-    WHERE tenant_id = $1 AND period_id = $2
-  `, user.TenantID, periodID).Scan(&gross, &deductions, &net)
+	gross, deductions, net, err := h.Service.PeriodTotals(r.Context(), user.TenantID, periodID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "export_failed", "failed to export journal", middleware.GetRequestID(r.Context()))
 		return
@@ -1428,33 +983,25 @@ func (h *Handler) handleExportJournal(w http.ResponseWriter, r *http.Request) {
 	cashAccount := "Payroll Cash"
 	headers := []string{"account", "debit", "credit"}
 	if templateID := r.URL.Query().Get("templateId"); templateID != "" {
-		var configJSON []byte
-		if err := h.Service.QueryRow(r.Context(), `
-      SELECT config_json
-      FROM journal_templates
-      WHERE tenant_id = $1 AND id = $2
-    `, user.TenantID, templateID).Scan(&configJSON); err == nil {
-			var cfg map[string]any
-			if err := json.Unmarshal(configJSON, &cfg); err == nil {
-				if val, ok := cfg["expenseAccount"].(string); ok && val != "" {
-					expenseAccount = val
-				}
-				if val, ok := cfg["deductionAccount"].(string); ok && val != "" {
-					deductionAccount = val
-				}
-				if val, ok := cfg["cashAccount"].(string); ok && val != "" {
-					cashAccount = val
-				}
-				if rawHeaders, ok := cfg["headers"].([]any); ok && len(rawHeaders) > 0 {
-					headers = []string{}
-					for _, h := range rawHeaders {
-						if hs, ok := h.(string); ok {
-							headers = append(headers, hs)
-						}
+		if cfg, err := h.Service.JournalTemplateConfig(r.Context(), user.TenantID, templateID); err == nil {
+			if val, ok := cfg["expenseAccount"].(string); ok && val != "" {
+				expenseAccount = val
+			}
+			if val, ok := cfg["deductionAccount"].(string); ok && val != "" {
+				deductionAccount = val
+			}
+			if val, ok := cfg["cashAccount"].(string); ok && val != "" {
+				cashAccount = val
+			}
+			if rawHeaders, ok := cfg["headers"].([]any); ok && len(rawHeaders) > 0 {
+				headers = []string{}
+				for _, header := range rawHeaders {
+					if hs, ok := header.(string); ok {
+						headers = append(headers, hs)
 					}
-					if len(headers) == 0 {
-						headers = []string{"account", "debit", "credit"}
-					}
+				}
+				if len(headers) == 0 {
+					headers = []string{"account", "debit", "credit"}
 				}
 			}
 		}
@@ -1489,20 +1036,15 @@ func (h *Handler) handleDownloadPayslip(w http.ResponseWriter, r *http.Request) 
 	}
 
 	payslipID := chi.URLParam(r, "payslipID")
-	var employeeID, fileURL string
-	err := h.Service.QueryRow(r.Context(), `
-    SELECT employee_id, COALESCE(file_url, '')
-    FROM payslips
-    WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, payslipID).Scan(&employeeID, &fileURL)
+	employeeID, fileURL, err := h.Service.PayslipInfo(r.Context(), user.TenantID, payslipID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "payslip not found", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	if user.RoleName != auth.RoleHR {
-		var selfEmployeeID string
-		if err := h.Service.QueryRow(r.Context(), "SELECT id FROM employees WHERE tenant_id = $1 AND user_id = $2", user.TenantID, user.UserID).Scan(&selfEmployeeID); err != nil {
+		selfEmployeeID, err := h.Service.FindEmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+		if err != nil {
 			slog.Warn("payslip download self employee lookup failed", "err", err)
 		}
 		if selfEmployeeID == "" || employeeID != selfEmployeeID {
@@ -1512,8 +1054,8 @@ func (h *Handler) handleDownloadPayslip(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if fileURL == "" {
-		var periodID string
-		if err := h.Service.QueryRow(r.Context(), "SELECT period_id FROM payslips WHERE tenant_id = $1 AND id = $2", user.TenantID, payslipID).Scan(&periodID); err != nil {
+		periodID, err := h.Service.PayslipPeriodID(r.Context(), user.TenantID, payslipID)
+		if err != nil {
 			slog.Warn("payslip period lookup failed", "err", err)
 		}
 		fileURL, err = h.Service.GeneratePayslipPDF(r.Context(), user.TenantID, periodID, employeeID, payslipID)
@@ -1521,7 +1063,7 @@ func (h *Handler) handleDownloadPayslip(w http.ResponseWriter, r *http.Request) 
 			slog.Warn("payslip pdf generation failed", "err", err)
 		}
 		if fileURL != "" {
-			if _, err := h.Service.Exec(r.Context(), "UPDATE payslips SET file_url = $1 WHERE id = $2", fileURL, payslipID); err != nil {
+			if err := h.Service.UpdatePayslipFileURL(r.Context(), payslipID, fileURL); err != nil {
 				slog.Warn("payslip file url update failed", "err", err)
 			}
 		}
@@ -1566,12 +1108,7 @@ func (h *Handler) handleRegeneratePayslip(w http.ResponseWriter, r *http.Request
 	}
 
 	payslipID := chi.URLParam(r, "payslipID")
-	var employeeID, periodID string
-	err := h.Service.QueryRow(r.Context(), `
-    SELECT employee_id, period_id
-    FROM payslips
-    WHERE tenant_id = $1 AND id = $2
-  `, user.TenantID, payslipID).Scan(&employeeID, &periodID)
+	employeeID, periodID, err := h.Service.PayslipEmployeePeriod(r.Context(), user.TenantID, payslipID)
 	if err != nil {
 		api.Fail(w, http.StatusNotFound, "not_found", "payslip not found", middleware.GetRequestID(r.Context()))
 		return
@@ -1582,7 +1119,7 @@ func (h *Handler) handleRegeneratePayslip(w http.ResponseWriter, r *http.Request
 		api.Fail(w, http.StatusInternalServerError, "payslip_generate_failed", "failed to regenerate payslip", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if _, err := h.Service.Exec(r.Context(), "UPDATE payslips SET file_url = $1 WHERE id = $2", fileURL, payslipID); err != nil {
+	if err := h.Service.UpdatePayslipFileURL(r.Context(), payslipID, fileURL); err != nil {
 		slog.Warn("payslip regenerate update failed", "err", err)
 	}
 

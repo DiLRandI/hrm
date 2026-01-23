@@ -199,7 +199,7 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 		performanceHandler := performancehandler.NewHandler(performanceService, coreStore, notifySvc, auditSvc)
 		performanceHandler.RegisterRoutes(r)
 
-		gdprService := gdpr.NewService(gdpr.NewStore(pool))
+		gdprService := gdpr.NewService(gdpr.NewStore(pool), coreStore, cryptoSvc)
 		gdprHandler := gdprhandler.NewHandler(gdprService, coreStore, cryptoSvc, jobsSvc, auditSvc)
 		gdprHandler.RegisterRoutes(r)
 
