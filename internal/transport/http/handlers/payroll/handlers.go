@@ -31,14 +31,15 @@ import (
 type Handler struct {
 	Service *payroll.Service
 	Perms   middleware.PermissionStore
+	Idem    *middleware.IdempotencyStore
 	Crypto  *cryptoutil.Service
 	Notify  *notifications.Service
 	Jobs    *jobs.Service
 	Audit   *audit.Service
 }
 
-func NewHandler(service *payroll.Service, perms middleware.PermissionStore, crypto *cryptoutil.Service, notify *notifications.Service, jobsSvc *jobs.Service, auditSvc *audit.Service) *Handler {
-	return &Handler{Service: service, Perms: perms, Crypto: crypto, Notify: notify, Jobs: jobsSvc, Audit: auditSvc}
+func NewHandler(service *payroll.Service, perms middleware.PermissionStore, idem *middleware.IdempotencyStore, crypto *cryptoutil.Service, notify *notifications.Service, jobsSvc *jobs.Service, auditSvc *audit.Service) *Handler {
+	return &Handler{Service: service, Perms: perms, Idem: idem, Crypto: crypto, Notify: notify, Jobs: jobsSvc, Audit: auditSvc}
 }
 
 type payrollPeriodPayload struct {
@@ -565,7 +566,7 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 	requestHash := middleware.RequestHash([]byte(periodID))
 	if idempotencyKey != "" {
-		stored, found, err := middleware.CheckIdempotency(r.Context(), h.Service.Pool(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash)
+		stored, found, err := h.Idem.Check(r.Context(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash)
 		if err != nil {
 			slog.Warn("idempotency check failed", "err", err)
 		}
@@ -618,7 +619,7 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 		slog.Warn("finalize response marshal failed", "err", err)
 	}
 	if idempotencyKey != "" {
-		if err := middleware.SaveIdempotency(r.Context(), h.Service.Pool(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash, payload); err != nil {
+		if err := h.Idem.Save(r.Context(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash, payload); err != nil {
 			slog.Warn("idempotency save failed", "err", err)
 		}
 	}
@@ -685,7 +686,7 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 	idempotencyKey := r.Header.Get("Idempotency-Key")
 	requestHash := middleware.RequestHash(body)
 	if idempotencyKey != "" {
-		stored, found, err := middleware.CheckIdempotency(r.Context(), h.Service.Pool(), user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash)
+		stored, found, err := h.Idem.Check(r.Context(), user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash)
 		if err != nil {
 			slog.Warn("idempotency check failed", "err", err)
 		}
@@ -782,7 +783,7 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 		encoded, err := json.Marshal(response)
 		if err != nil {
 			slog.Warn("idempotency response marshal failed", "err", err)
-		} else if err := middleware.SaveIdempotency(r.Context(), h.Service.Pool(), user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash, encoded); err != nil {
+		} else if err := h.Idem.Save(r.Context(), user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash, encoded); err != nil {
 			slog.Warn("idempotency save failed", "err", err)
 		}
 	}

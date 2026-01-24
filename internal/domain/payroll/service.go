@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jung-kurt/gofpdf"
 
 	cryptoutil "hrm/internal/platform/crypto"
@@ -22,23 +20,8 @@ func NewService(store *Store, crypto *cryptoutil.Service) *Service {
 	return &Service{store: store, crypto: crypto}
 }
 
-func (s *Service) Pool() *pgxpool.Pool {
-	return s.store.DB
-}
-
 func (s *Service) GeneratePayslipPDF(ctx context.Context, tenantID, periodID, employeeID, payslipID string) (string, error) {
-	var firstName, lastName, email, currency string
-	var gross, deductions, net float64
-	var startDate, endDate time.Time
-	err := s.store.DB.QueryRow(ctx, `
-    SELECT e.first_name, e.last_name, e.email,
-           r.gross, r.deductions, r.net, r.currency,
-           p.start_date, p.end_date
-    FROM payroll_results r
-    JOIN employees e ON r.employee_id = e.id
-    JOIN payroll_periods p ON r.period_id = p.id
-    WHERE r.tenant_id = $1 AND r.period_id = $2 AND r.employee_id = $3
-  `, tenantID, periodID, employeeID).Scan(&firstName, &lastName, &email, &gross, &deductions, &net, &currency, &startDate, &endDate)
+	data, err := s.store.PayslipPDFData(ctx, tenantID, periodID, employeeID)
 	if err != nil {
 		return "", err
 	}
@@ -54,17 +37,17 @@ func (s *Service) GeneratePayslipPDF(ctx context.Context, tenantID, periodID, em
 	pdf.Cell(40, 10, "Payslip")
 	pdf.Ln(12)
 	pdf.SetFont("Helvetica", "", 12)
-	pdf.Cell(0, 8, fmt.Sprintf("Employee: %s %s", firstName, lastName))
+	pdf.Cell(0, 8, fmt.Sprintf("Employee: %s %s", data.FirstName, data.LastName))
 	pdf.Ln(7)
-	pdf.Cell(0, 8, fmt.Sprintf("Email: %s", email))
+	pdf.Cell(0, 8, fmt.Sprintf("Email: %s", data.Email))
 	pdf.Ln(7)
-	pdf.Cell(0, 8, fmt.Sprintf("Period: %s to %s", startDate.Format("2006-01-02"), endDate.Format("2006-01-02")))
+	pdf.Cell(0, 8, fmt.Sprintf("Period: %s to %s", data.StartDate.Format("2006-01-02"), data.EndDate.Format("2006-01-02")))
 	pdf.Ln(10)
-	pdf.Cell(0, 8, fmt.Sprintf("Gross: %.2f %s", gross, currency))
+	pdf.Cell(0, 8, fmt.Sprintf("Gross: %.2f %s", data.Gross, data.Currency))
 	pdf.Ln(7)
-	pdf.Cell(0, 8, fmt.Sprintf("Deductions: %.2f %s", deductions, currency))
+	pdf.Cell(0, 8, fmt.Sprintf("Deductions: %.2f %s", data.Deductions, data.Currency))
 	pdf.Ln(7)
-	pdf.Cell(0, 8, fmt.Sprintf("Net: %.2f %s", net, currency))
+	pdf.Cell(0, 8, fmt.Sprintf("Net: %.2f %s", data.Net, data.Currency))
 
 	if err := pdf.OutputFileAndClose(filePath); err != nil {
 		return "", err

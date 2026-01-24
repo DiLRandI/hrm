@@ -120,8 +120,9 @@ func (s *Service) scheduleAccruals(ctx context.Context, interval time.Duration) 
 			}
 			for _, tenantID := range tenants {
 				tenant := tenantID
+				store := leave.NewStore(s.DB)
 				s.Enqueue(JobLeaveAccrual, tenant, func(ctx context.Context) (any, error) {
-					return leave.ApplyAccruals(ctx, s.DB, tenant, time.Now())
+					return leave.ApplyAccruals(ctx, store, tenant, time.Now())
 				})
 			}
 		}

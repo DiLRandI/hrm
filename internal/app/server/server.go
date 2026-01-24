@@ -75,7 +75,7 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 
 	coreStore := core.NewStore(pool, cryptoSvc)
 	mailer := email.New(cfg)
-	notifySvc := notifications.New(pool, mailer)
+	notifySvc := notifications.New(notifications.NewStore(pool), mailer)
 	notifySvc.DefaultFrom = cfg.EmailFrom
 	jobsSvc := jobs.New(pool, cfg)
 	metricsCollector := metrics.New()
@@ -192,7 +192,8 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 		leaveHandler.RegisterRoutes(r)
 
 		payrollService := payroll.NewService(payroll.NewStore(pool), cryptoSvc)
-		payrollHandler := payrollhandler.NewHandler(payrollService, coreStore, cryptoSvc, notifySvc, jobsSvc, auditSvc)
+		idempotencyStore := middleware.NewIdempotencyStore(pool)
+		payrollHandler := payrollhandler.NewHandler(payrollService, coreStore, idempotencyStore, cryptoSvc, notifySvc, jobsSvc, auditSvc)
 		payrollHandler.RegisterRoutes(r)
 
 		performanceService := performance.NewService(performance.NewStore(pool))

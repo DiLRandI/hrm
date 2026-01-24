@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type AccrualSummary struct {
@@ -24,26 +23,12 @@ type policyRow struct {
 	CarryOver     float64
 }
 
-func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now time.Time) (AccrualSummary, error) {
+func ApplyAccruals(ctx context.Context, store *Store, tenantID string, now time.Time) (AccrualSummary, error) {
 	var summary AccrualSummary
 
-	rows, err := db.Query(ctx, `
-    SELECT id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit
-    FROM leave_policies
-    WHERE tenant_id = $1 AND accrual_rate IS NOT NULL
-  `, tenantID)
+	policies, err := store.ListAccrualPolicies(ctx, tenantID)
 	if err != nil {
 		return summary, err
-	}
-	defer rows.Close()
-
-	policies := make([]policyRow, 0)
-	for rows.Next() {
-		var p policyRow
-		if err := rows.Scan(&p.ID, &p.LeaveTypeID, &p.AccrualRate, &p.AccrualPeriod, &p.Entitlement, &p.CarryOver); err != nil {
-			return summary, err
-		}
-		policies = append(policies, p)
 	}
 
 	for _, policy := range policies {
@@ -52,12 +37,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			continue
 		}
 
-		var last time.Time
-		err := db.QueryRow(ctx, `
-      SELECT last_accrued_on
-      FROM leave_accrual_runs
-      WHERE tenant_id = $1 AND policy_id = $2
-    `, tenantID, policy.ID).Scan(&last)
+		last, err := store.LastAccruedOn(ctx, tenantID, policy.ID)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return summary, err
 		}
@@ -65,16 +45,12 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			continue
 		}
 
-		tx, err := db.Begin(ctx)
+		tx, err := store.BeginTx(ctx)
 		if err != nil {
 			return summary, err
 		}
 
-		employees, err := tx.Query(ctx, `
-      SELECT id, start_date
-      FROM employees
-      WHERE tenant_id = $1 AND status = 'active'
-    `, tenantID)
+		employees, err := store.ListActiveEmployeesTx(ctx, tx, tenantID)
 		if err != nil {
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
 				slog.Warn("leave accrual rollback failed", "err", rbErr)
@@ -82,16 +58,7 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			return summary, err
 		}
 
-		for employees.Next() {
-			var employeeID string
-			var startDate *time.Time
-			if err := employees.Scan(&employeeID, &startDate); err != nil {
-				employees.Close()
-				if rbErr := tx.Rollback(ctx); rbErr != nil {
-					slog.Warn("leave accrual rollback failed", "err", rbErr)
-				}
-				return summary, err
-			}
+		for employeeID, startDate := range employees {
 			accrual := policy.AccrualRate
 			if startDate != nil && startDate.After(periodStart) {
 				accrual = proratedAccrual(policy.AccrualRate, *startDate, periodStart, now, policy.AccrualPeriod)
@@ -107,22 +74,11 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			}
 
 			if capValue == nil {
-				_, err = tx.Exec(ctx, `
-          INSERT INTO leave_balances (tenant_id, employee_id, leave_type_id, balance, pending, used)
-          VALUES ($1,$2,$3,$4,0,0)
-          ON CONFLICT (employee_id, leave_type_id)
-          DO UPDATE SET balance = leave_balances.balance + EXCLUDED.balance, updated_at = now()
-        `, tenantID, employeeID, policy.LeaveTypeID, accrual)
+				err = store.UpsertBalanceTx(ctx, tx, tenantID, employeeID, policy.LeaveTypeID, accrual)
 			} else {
-				_, err = tx.Exec(ctx, `
-          INSERT INTO leave_balances (tenant_id, employee_id, leave_type_id, balance, pending, used)
-          VALUES ($1,$2,$3,$4,0,0)
-          ON CONFLICT (employee_id, leave_type_id)
-          DO UPDATE SET balance = LEAST(leave_balances.balance + EXCLUDED.balance, $5), updated_at = now()
-        `, tenantID, employeeID, policy.LeaveTypeID, accrual, *capValue)
+				err = store.UpsertBalanceWithCapTx(ctx, tx, tenantID, employeeID, policy.LeaveTypeID, accrual, *capValue)
 			}
 			if err != nil {
-				employees.Close()
 				if rbErr := tx.Rollback(ctx); rbErr != nil {
 					slog.Warn("leave accrual rollback failed", "err", rbErr)
 				}
@@ -130,21 +86,8 @@ func ApplyAccruals(ctx context.Context, db *pgxpool.Pool, tenantID string, now t
 			}
 			summary.EmployeesAccrued++
 		}
-		if err := employees.Err(); err != nil {
-			employees.Close()
-			if rbErr := tx.Rollback(ctx); rbErr != nil {
-				slog.Warn("leave accrual rollback failed", "err", rbErr)
-			}
-			return summary, err
-		}
-		employees.Close()
 
-		_, err = tx.Exec(ctx, `
-      INSERT INTO leave_accrual_runs (tenant_id, policy_id, last_accrued_on)
-      VALUES ($1,$2,$3)
-      ON CONFLICT (tenant_id, policy_id) DO UPDATE SET last_accrued_on = EXCLUDED.last_accrued_on
-    `, tenantID, policy.ID, periodStart)
-		if err != nil {
+		if err := store.RecordAccrualRunTx(ctx, tx, tenantID, policy.ID, periodStart, summary.EmployeesAccrued); err != nil {
 			if rbErr := tx.Rollback(ctx); rbErr != nil {
 				slog.Warn("leave accrual rollback failed", "err", rbErr)
 			}

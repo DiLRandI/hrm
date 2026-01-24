@@ -25,138 +25,67 @@ func (s *Service) ExecuteAnonymization(ctx context.Context, tenantID, jobID stri
 		return AnonymizationResult{}, ErrAnonymizationBadState
 	}
 
-	tx, err := s.store.DB.Begin(ctx)
+	tx, err := s.store.BeginTx(ctx)
 	if err != nil {
 		return AnonymizationResult{}, err
 	}
 	defer tx.Rollback(ctx)
 
-	execTx := func(query string, args ...any) error {
-		_, execErr := tx.Exec(ctx, query, args...)
-		return execErr
-	}
-
-	if err := execTx(`
-    UPDATE anonymization_jobs
-    SET status = $1
-    WHERE tenant_id = $2 AND id = $3
-  `, AnonymizationProcessing, tenantID, jobID); err != nil {
+	if err := s.store.UpdateAnonymizationStatusTx(ctx, tx, tenantID, jobID, AnonymizationProcessing); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	var userID string
-	if err := tx.QueryRow(ctx, `
-    SELECT user_id
-    FROM employees
-    WHERE tenant_id = $1 AND id = $2
-  `, tenantID, employeeID).Scan(&userID); err != nil {
+	userID, err := s.store.EmployeeUserIDTx(ctx, tx, tenantID, employeeID)
+	if err != nil {
 		slog.Warn("anonymization user lookup failed", "err", err)
 	}
 
 	anonEmployeeEmail := fmt.Sprintf("anonymized+%s@example.local", employeeID)
-	if err := execTx(`
-    UPDATE employees
-    SET employee_number = NULL,
-        first_name = 'Anonymized',
-        last_name = 'Employee',
-        email = $1,
-        phone = NULL,
-        address = NULL,
-        national_id = NULL,
-        national_id_enc = NULL,
-        bank_account = NULL,
-        bank_account_enc = NULL,
-        salary = NULL,
-        salary_enc = NULL,
-        currency = COALESCE(currency, 'USD'),
-        employment_type = NULL,
-        department_id = NULL,
-        manager_id = NULL,
-        pay_group_id = NULL,
-        status = $2,
-        updated_at = now()
-    WHERE tenant_id = $3 AND id = $4
-  `, anonEmployeeEmail, core.EmployeeStatusAnonymized, tenantID, employeeID); err != nil {
+	if err := s.store.AnonymizeEmployeeTx(ctx, tx, tenantID, employeeID, anonEmployeeEmail, core.EmployeeStatusAnonymized); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
 	if userID != "" {
 		anonUserEmail := fmt.Sprintf("anonymized+%s@example.local", userID)
-		if err := execTx(`
-      UPDATE users
-      SET email = $1,
-          status = $2,
-          mfa_secret_enc = NULL,
-          mfa_enabled = false,
-          updated_at = now()
-      WHERE tenant_id = $3 AND id = $4
-    `, anonUserEmail, core.UserStatusDisabled, tenantID, userID); err != nil {
+		if err := s.store.AnonymizeUserTx(ctx, tx, tenantID, userID, anonUserEmail, core.UserStatusDisabled); err != nil {
 			s.failAnonymization(ctx, tenantID, jobID)
 			return AnonymizationResult{}, err
 		}
 	}
 
-	if err := execTx(`
-    UPDATE leave_requests
-    SET reason = NULL
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID); err != nil {
+	if err := s.store.AnonymizeLeaveRequestsTx(ctx, tx, tenantID, employeeID); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	if err := execTx(`
-    UPDATE goals
-    SET title = 'Anonymized goal', description = NULL, metric = NULL, updated_at = now()
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID); err != nil {
+	if err := s.store.AnonymizeGoalsTx(ctx, tx, tenantID, employeeID); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	if err := execTx(`
-    UPDATE feedback
-    SET message = 'Anonymized'
-    WHERE tenant_id = $1 AND to_employee_id = $2
-  `, tenantID, employeeID); err != nil {
+	if err := s.store.AnonymizeFeedbackTx(ctx, tx, tenantID, employeeID); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	if err := execTx(`
-    UPDATE checkins
-    SET notes = 'Anonymized', private = true
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID); err != nil {
+	if err := s.store.AnonymizeCheckinsTx(ctx, tx, tenantID, employeeID); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	if err := execTx(`
-    UPDATE pips
-    SET objectives_json = NULL, milestones_json = NULL, review_dates_json = NULL, updated_at = now()
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID); err != nil {
+	if err := s.store.AnonymizePIPsTx(ctx, tx, tenantID, employeeID); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	if err := execTx(`
-    UPDATE payslips
-    SET file_url = NULL
-    WHERE tenant_id = $1 AND employee_id = $2
-  `, tenantID, employeeID); err != nil {
+	if err := s.store.ClearPayslipURLsTx(ctx, tx, tenantID, employeeID); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}
 
-	if err := execTx(`
-    UPDATE anonymization_jobs
-    SET status = $1, completed_at = now()
-    WHERE tenant_id = $2 AND id = $3
-  `, AnonymizationCompleted, tenantID, jobID); err != nil {
+	if err := s.store.CompleteAnonymizationJobTx(ctx, tx, tenantID, jobID, AnonymizationCompleted); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
 	}

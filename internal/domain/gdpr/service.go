@@ -23,5 +23,5 @@ func NewService(store *Store, employees EmployeeStore, crypto *cryptoutil.Servic
 }
 
 func (s *Service) ApplyRetention(ctx context.Context, tenantID, category string, cutoff time.Time) (int64, error) {
-	return ApplyRetention(ctx, s.store.DB, tenantID, category, cutoff)
+	return s.store.ApplyRetention(ctx, tenantID, category, cutoff)
 }
