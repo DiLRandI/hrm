@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
@@ -32,6 +33,11 @@ export default function Leave() {
   const role = getRole(user);
   const isHR = role === ROLE_HR;
   const isManager = role === ROLE_MANAGER;
+  const location = useLocation();
+  const activeSection = useMemo(() => {
+    const segment = location.pathname.split('/')[2];
+    return segment || 'requests';
+  }, [location.pathname]);
 
   const [requestOffset, setRequestOffset] = useState(0);
   const [accrualSummary, setAccrualSummary] = useState(null);
@@ -72,35 +78,82 @@ export default function Leave() {
 
   const fetchLeaveData = useCallback(
     async ({ signal }) => {
-      const [
-        types,
-        policies,
-        balances,
-        holidays,
-        calendar,
-        balanceReport,
-        usageReport,
-      ] = await Promise.all([
-        api.get('/leave/types', { signal }),
-        api.get('/leave/policies', { signal }),
-        api.get('/leave/balances', { signal }),
-        api.get('/leave/holidays', { signal }),
-        api.get('/leave/calendar', { signal }),
-        api.get('/leave/reports/balances', { signal }),
-        api.get('/leave/reports/usage', { signal }),
-      ]);
-
-      return {
-        types: normalizeArray(types),
-        policies: normalizeArray(policies),
-        balances: normalizeArray(balances),
-        holidays: normalizeArray(holidays),
-        calendar: normalizeArray(calendar),
-        balanceReport: normalizeArray(balanceReport),
-        usageReport: normalizeArray(usageReport),
+      const needs = {
+        types: true,
+        policies: activeSection === 'policies',
+        balances: activeSection === 'balances',
+        holidays: activeSection === 'holidays',
+        calendar: activeSection === 'holidays',
+        balanceReport: activeSection === 'reports',
+        usageReport: activeSection === 'reports',
       };
+
+      const result = {
+        types: [],
+        policies: [],
+        balances: [],
+        holidays: [],
+        calendar: [],
+        balanceReport: [],
+        usageReport: [],
+      };
+
+      const requests = [];
+
+      if (needs.types) {
+        requests.push(
+          api.get('/leave/types', { signal }).then((data) => {
+            result.types = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.policies) {
+        requests.push(
+          api.get('/leave/policies', { signal }).then((data) => {
+            result.policies = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.balances) {
+        requests.push(
+          api.get('/leave/balances', { signal }).then((data) => {
+            result.balances = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.holidays) {
+        requests.push(
+          api.get('/leave/holidays', { signal }).then((data) => {
+            result.holidays = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.calendar) {
+        requests.push(
+          api.get('/leave/calendar', { signal }).then((data) => {
+            result.calendar = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.balanceReport) {
+        requests.push(
+          api.get('/leave/reports/balances', { signal }).then((data) => {
+            result.balanceReport = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.usageReport) {
+        requests.push(
+          api.get('/leave/reports/usage', { signal }).then((data) => {
+            result.usageReport = normalizeArray(data);
+          }),
+        );
+      }
+
+      await Promise.all(requests);
+      return result;
     },
-    [],
+    [activeSection],
   );
 
   const {
@@ -108,7 +161,7 @@ export default function Leave() {
     error: leaveError,
     loading: leaveLoading,
     reload: reloadLeave,
-  } = useApiQuery(fetchLeaveData, [], {
+  } = useApiQuery(fetchLeaveData, [activeSection], {
     initialData: {
       types: [],
       policies: [],
@@ -130,7 +183,10 @@ export default function Leave() {
     error: requestError,
     loading: requestsLoading,
     reload: reloadRequests,
-  } = useApiQuery(fetchRequests, [requestOffset], { initialData: { data: [], total: 0 } });
+  } = useApiQuery(fetchRequests, [requestOffset, activeSection], {
+    enabled: activeSection === 'requests',
+    initialData: { data: [], total: 0 },
+  });
 
   const requests = normalizeArray(requestPage?.data);
   const requestTotal = requestPage?.total ?? requests.length;
@@ -306,7 +362,8 @@ export default function Leave() {
   };
 
   const loading = leaveLoading || requestsLoading;
-  const combinedError = actionError || leaveError || requestError;
+  const combinedError =
+    actionError || leaveError || (activeSection === 'requests' ? requestError : '');
 
   return (
     <section className="page">
@@ -324,117 +381,154 @@ export default function Leave() {
 
       <InlineError message={combinedError} />
 
+      <nav className="subnav">
+        <NavLink to="/leave/requests">Requests</NavLink>
+        <NavLink to="/leave/balances">Balances</NavLink>
+        {isHR && <NavLink to="/leave/policies">Policies</NavLink>}
+        {isHR && <NavLink to="/leave/holidays">Holidays</NavLink>}
+        {isHR && <NavLink to="/leave/reports">Reports</NavLink>}
+      </nav>
+
       {loading && leaveData.types.length === 0 && (
-        <PageStatus title="Loading leave data" description="Gathering policies, balances, and requests." />
+        <PageStatus title="Loading leave data" description="Gathering leave details." />
       )}
 
-      {accrualSummary && (
-        <div className="card">
-          <h3>Accrual Run</h3>
-          <p>Updated balances: {accrualSummary.updated || 0}</p>
-          <p>Skipped: {accrualSummary.skipped || 0}</p>
-        </div>
-      )}
+      <Routes>
+        <Route path="/" element={<Navigate to="requests" replace />} />
+        <Route
+          path="requests"
+          element={
+            <>
+              <LeaveRequestsCard
+                types={leaveData.types}
+                typeLookup={typeLookup}
+                requests={requests}
+                requestForm={requestForm}
+                onFormChange={(field, value) => setRequestForm((prev) => ({ ...prev, [field]: value }))}
+                onSubmit={submitRequest}
+                isManager={isManager}
+                isHR={isHR}
+                onApprove={approveRequest}
+                onReject={rejectRequest}
+                onCancel={cancelRequest}
+                disabled={loading}
+              />
 
-      <LeaveRequestsCard
-        types={leaveData.types}
-        typeLookup={typeLookup}
-        requests={requests}
-        requestForm={requestForm}
-        onFormChange={(field, value) => setRequestForm((prev) => ({ ...prev, [field]: value }))}
-        onSubmit={submitRequest}
-        isManager={isManager}
-        isHR={isHR}
-        onApprove={approveRequest}
-        onReject={rejectRequest}
-        onCancel={cancelRequest}
-        disabled={loading}
-      />
-
-      <div className="row-actions pagination">
-        <button type="button" className="ghost" onClick={prevRequests} disabled={requestOffset === 0}>
-          Prev
-        </button>
-        <small>
-          {requestTotal ? `${Math.min(requestOffset + REQUEST_LIMIT, requestTotal)} of ${requestTotal}` : '—'}
-        </small>
-        <button
-          type="button"
-          className="ghost"
-          onClick={nextRequests}
-          disabled={requestTotal ? requestOffset + REQUEST_LIMIT >= requestTotal : requests.length < REQUEST_LIMIT}
-        >
-          Next
-        </button>
-      </div>
-
-      {leaveData.balances.length === 0 && !loading ? (
-        <EmptyState
-          title="No balances yet"
-          description="Balances and policy usage will appear once requests are created."
+              <div className="row-actions pagination">
+                <button type="button" className="ghost" onClick={prevRequests} disabled={requestOffset === 0}>
+                  Prev
+                </button>
+                <small>
+                  {requestTotal ? `${Math.min(requestOffset + REQUEST_LIMIT, requestTotal)} of ${requestTotal}` : '—'}
+                </small>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={nextRequests}
+                  disabled={requestTotal ? requestOffset + REQUEST_LIMIT >= requestTotal : requests.length < REQUEST_LIMIT}
+                >
+                  Next
+                </button>
+              </div>
+            </>
+          }
         />
-      ) : (
-        <div className="card-grid">
-          <LeaveBalancesCard balances={leaveData.balances} typeLookup={typeLookup} />
-          {isHR && (
-            <LeaveAdjustCard
-              types={leaveData.types}
-              form={adjustForm}
-              onChange={(field, value) => setAdjustForm((prev) => ({ ...prev, [field]: value }))}
-              onSubmit={adjustBalance}
-              disabled={loading}
-            />
-          )}
-        </div>
-      )}
+        <Route
+          path="balances"
+          element={
+            <>
+              {accrualSummary && (
+                <div className="card">
+                  <h3>Accrual Run</h3>
+                  <p>Updated balances: {accrualSummary.updated || 0}</p>
+                  <p>Skipped: {accrualSummary.skipped || 0}</p>
+                </div>
+              )}
 
-      {isHR && (
-        <div className="card-grid">
-          <LeaveTypesCard
-            types={leaveData.types}
-            form={typeForm}
-            onChange={(field, value) => setTypeForm((prev) => ({ ...prev, [field]: value }))}
-            onSubmit={createType}
-            disabled={loading}
-          />
-          <LeavePoliciesCard
-            types={leaveData.types}
-            policies={leaveData.policies}
-            typeLookup={typeLookup}
-            form={policyForm}
-            onChange={(field, value) => setPolicyForm((prev) => ({ ...prev, [field]: value }))}
-            onSubmit={createPolicy}
-            disabled={loading}
-          />
-        </div>
-      )}
-
-      {isHR && (
-        <div className="card-grid">
-          <LeaveHolidaysCard
-            holidays={leaveData.holidays}
-            form={holidayForm}
-            onChange={(field, value) => setHolidayForm((prev) => ({ ...prev, [field]: value }))}
-            onSubmit={createHoliday}
-            onDelete={deleteHoliday}
-            disabled={loading}
-          />
-          <LeaveCalendarCard
-            calendar={leaveData.calendar}
-            typeLookup={typeLookup}
-            onExport={exportCalendar}
-            disabled={loading}
-          />
-        </div>
-      )}
-
-      {isHR && (
-        <LeaveReportsGrid
-          balanceReport={leaveData.balanceReport}
-          usageReport={leaveData.usageReport}
-          typeLookup={typeLookup}
+              {leaveData.balances.length === 0 && !loading ? (
+                <EmptyState
+                  title="No balances yet"
+                  description="Balances and policy usage will appear once requests are created."
+                />
+              ) : (
+                <div className="card-grid">
+                  <LeaveBalancesCard balances={leaveData.balances} typeLookup={typeLookup} />
+                  {isHR && (
+                    <LeaveAdjustCard
+                      types={leaveData.types}
+                      form={adjustForm}
+                      onChange={(field, value) => setAdjustForm((prev) => ({ ...prev, [field]: value }))}
+                      onSubmit={adjustBalance}
+                      disabled={loading}
+                    />
+                  )}
+                </div>
+              )}
+            </>
+          }
         />
-      )}
+        {isHR && (
+          <Route
+            path="policies"
+            element={
+              <div className="card-grid">
+                <LeaveTypesCard
+                  types={leaveData.types}
+                  form={typeForm}
+                  onChange={(field, value) => setTypeForm((prev) => ({ ...prev, [field]: value }))}
+                  onSubmit={createType}
+                  disabled={loading}
+                />
+                <LeavePoliciesCard
+                  types={leaveData.types}
+                  policies={leaveData.policies}
+                  typeLookup={typeLookup}
+                  form={policyForm}
+                  onChange={(field, value) => setPolicyForm((prev) => ({ ...prev, [field]: value }))}
+                  onSubmit={createPolicy}
+                  disabled={loading}
+                />
+              </div>
+            }
+          />
+        )}
+        {isHR && (
+          <Route
+            path="holidays"
+            element={
+              <div className="card-grid">
+                <LeaveHolidaysCard
+                  holidays={leaveData.holidays}
+                  form={holidayForm}
+                  onChange={(field, value) => setHolidayForm((prev) => ({ ...prev, [field]: value }))}
+                  onSubmit={createHoliday}
+                  onDelete={deleteHoliday}
+                  disabled={loading}
+                />
+                <LeaveCalendarCard
+                  calendar={leaveData.calendar}
+                  typeLookup={typeLookup}
+                  onExport={exportCalendar}
+                  disabled={loading}
+                />
+              </div>
+            }
+          />
+        )}
+        {isHR && (
+          <Route
+            path="reports"
+            element={
+              <LeaveReportsGrid
+                balanceReport={leaveData.balanceReport}
+                usageReport={leaveData.usageReport}
+                typeLookup={typeLookup}
+              />
+            }
+          />
+        )}
+        <Route path="*" element={<Navigate to="requests" replace />} />
+      </Routes>
     </section>
   );
 }

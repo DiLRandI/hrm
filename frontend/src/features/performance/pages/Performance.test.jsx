@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import Performance from './Performance.jsx';
 import { api } from '../../../services/apiClient.js';
@@ -49,7 +50,13 @@ describe('Performance page', () => {
     loadMockData();
     api.post.mockResolvedValue({ id: 'goal-1' });
 
-    const { container } = render(<Performance />);
+    const { container } = render(
+      <MemoryRouter initialEntries={['/performance/goals']}>
+        <Routes>
+          <Route path="/performance/*" element={<Performance />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     await userEvent.type(await screen.findByPlaceholderText('Goal title'), 'Ship Q1');
     await userEvent.type(screen.getByPlaceholderText('Metric'), 'Launches');
@@ -75,7 +82,13 @@ describe('Performance page', () => {
     loadMockData();
     api.post.mockResolvedValue({ status: 'manager_pending' });
 
-    render(<Performance />);
+    render(
+      <MemoryRouter initialEntries={['/performance/reviews']}>
+        <Routes>
+          <Route path="/performance/*" element={<Performance />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     const reviewForm = screen.getByRole('button', { name: /submit review/i }).closest('form');
     if (!reviewForm) {

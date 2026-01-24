@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import Leave from './Leave.jsx';
 import { api } from '../../../services/apiClient.js';
@@ -40,7 +41,13 @@ describe('Leave page', () => {
     api.getWithMeta.mockResolvedValue({ data: [], total: 0 });
     api.post.mockResolvedValue({ id: 'req-1' });
 
-    const { container } = render(<Leave />);
+    const { container } = render(
+      <MemoryRouter initialEntries={['/leave/requests']}>
+        <Routes>
+          <Route path="/leave/*" element={<Leave />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     const leaveTypeSelect = await screen.findByRole('combobox');
     await userEvent.selectOptions(leaveTypeSelect, 't1');

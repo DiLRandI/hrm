@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR } from '../../../shared/constants/roles.js';
@@ -18,6 +19,11 @@ const EMPLOYEE_LIMIT = 25;
 export default function Employees() {
   const { user } = useAuth();
   const isHR = getRole(user) === ROLE_HR;
+  const location = useLocation();
+  const activeSection = useMemo(() => {
+    const segment = location.pathname.split('/')[2];
+    return segment || 'overview';
+  }, [location.pathname]);
   const [employeeOffset, setEmployeeOffset] = useState(0);
   const [selectedRole, setSelectedRole] = useState('');
   const [selectedPerms, setSelectedPerms] = useState([]);
@@ -37,48 +43,86 @@ export default function Employees() {
     error: employeeError,
     loading: employeesLoading,
     reload: reloadEmployees,
-  } = useApiQuery(fetchEmployees, [employeeOffset], { initialData: { data: [], total: 0 } });
+  } = useApiQuery(fetchEmployees, [employeeOffset, activeSection], {
+    enabled: activeSection === 'directory' || activeSection === 'overview',
+    initialData: { data: [], total: 0 },
+  });
 
   const employees = Array.isArray(employeePage?.data) ? employeePage.data : [];
   const employeeTotal = employeePage?.total ?? employees.length;
 
+  const lookupNeeds = useMemo(() => {
+    return {
+      departments: isHR && activeSection === 'manage',
+      orgChart: activeSection === 'org',
+      payGroups: isHR && (activeSection === 'manage' || activeSection === 'directory'),
+      roles: isHR && activeSection === 'access',
+      permissions: isHR && activeSection === 'access',
+      employeeOptions: isHR && activeSection === 'manage',
+    };
+  }, [activeSection, isHR]);
+
+  const lookupsEnabled = Object.values(lookupNeeds).some(Boolean);
+
   const fetchLookups = useCallback(
     async ({ signal }) => {
-      const baseRequests = [
-        api.get('/departments', { signal }),
-        api.get('/org/chart', { signal }),
-      ];
-
-      if (isHR) {
-        const [departments, orgChart, payGroups, roles, permissions, employeeOptions] = await Promise.all([
-          ...baseRequests,
-          api.get('/payroll/groups', { signal }),
-          api.get('/roles', { signal }),
-          api.get('/permissions', { signal }),
-          api.get('/employees?limit=500&offset=0', { signal }),
-        ]);
-
-        return {
-          departments: Array.isArray(departments) ? departments : [],
-          orgChart: Array.isArray(orgChart) ? orgChart : [],
-          payGroups: Array.isArray(payGroups) ? payGroups : [],
-          roles: Array.isArray(roles) ? roles : [],
-          permissions: Array.isArray(permissions) ? permissions : [],
-          employeeOptions: Array.isArray(employeeOptions) ? employeeOptions : [],
-        };
-      }
-
-      const [departments, orgChart] = await Promise.all(baseRequests);
-      return {
-        departments: Array.isArray(departments) ? departments : [],
-        orgChart: Array.isArray(orgChart) ? orgChart : [],
+      const result = {
+        departments: [],
+        orgChart: [],
         payGroups: [],
         roles: [],
         permissions: [],
         employeeOptions: [],
       };
+      const requests = [];
+
+      if (lookupNeeds.departments) {
+        requests.push(
+          api.get('/departments', { signal }).then((data) => {
+            result.departments = Array.isArray(data) ? data : [];
+          }),
+        );
+      }
+      if (lookupNeeds.orgChart) {
+        requests.push(
+          api.get('/org/chart', { signal }).then((data) => {
+            result.orgChart = Array.isArray(data) ? data : [];
+          }),
+        );
+      }
+      if (lookupNeeds.payGroups) {
+        requests.push(
+          api.get('/payroll/groups', { signal }).then((data) => {
+            result.payGroups = Array.isArray(data) ? data : [];
+          }),
+        );
+      }
+      if (lookupNeeds.roles) {
+        requests.push(
+          api.get('/roles', { signal }).then((data) => {
+            result.roles = Array.isArray(data) ? data : [];
+          }),
+        );
+      }
+      if (lookupNeeds.permissions) {
+        requests.push(
+          api.get('/permissions', { signal }).then((data) => {
+            result.permissions = Array.isArray(data) ? data : [];
+          }),
+        );
+      }
+      if (lookupNeeds.employeeOptions) {
+        requests.push(
+          api.get('/employees?limit=500&offset=0', { signal }).then((data) => {
+            result.employeeOptions = Array.isArray(data) ? data : [];
+          }),
+        );
+      }
+
+      await Promise.all(requests);
+      return result;
     },
-    [isHR],
+    [lookupNeeds],
   );
 
   const {
@@ -86,22 +130,19 @@ export default function Employees() {
     error: lookupError,
     loading: lookupsLoading,
     reload: reloadLookups,
-  } = useApiQuery(
-    fetchLookups,
-    [isHR],
-    {
-      initialData: {
-        departments: [],
-        orgChart: [],
-        payGroups: [],
-        roles: [],
-        permissions: [],
-        employeeOptions: [],
-      },
+  } = useApiQuery(fetchLookups, [isHR, activeSection], {
+    enabled: lookupsEnabled,
+    initialData: {
+      departments: [],
+      orgChart: [],
+      payGroups: [],
+      roles: [],
+      permissions: [],
+      employeeOptions: [],
     },
-  );
+  });
 
-  const employeeOptions = isHR ? lookups.employeeOptions : employees;
+  const employeeOptions = isHR ? (lookups.employeeOptions.length ? lookups.employeeOptions : employees) : employees;
 
   const payGroupById = useMemo(() => {
     return (lookups.payGroups || []).reduce((acc, group) => {
@@ -213,7 +254,10 @@ export default function Employees() {
   };
 
   const loading = employeesLoading || lookupsLoading;
-  const combinedError = actionError || employeeError || lookupError;
+  const combinedError =
+    actionError ||
+    (activeSection === 'directory' ? employeeError : '') ||
+    (lookupsEnabled ? lookupError : '');
 
   return (
     <section className="page">
@@ -226,102 +270,157 @@ export default function Employees() {
 
       <InlineError message={combinedError} />
 
-      {loading && employees.length === 0 && (
-        <PageStatus title="Loading employees" description="Preparing people records and org data." />
-      )}
+      <nav className="subnav">
+        <NavLink to="/employees/overview">Overview</NavLink>
+        <NavLink to="/employees/directory">Directory</NavLink>
+        {isHR && <NavLink to="/employees/manage">Add & Edit</NavLink>}
+        <NavLink to="/employees/org">Org chart</NavLink>
+        {isHR && <NavLink to="/employees/access">Roles & Access</NavLink>}
+      </nav>
 
-      {tempCredentials && (
-        <div className="card">
-          <h3>Temporary login created</h3>
-          <p>
-            Share this once with the employee. It will not be shown again.
-          </p>
-          <div className="inline-form" style={{ marginTop: '12px' }}>
-            <input readOnly value={tempCredentials.email} aria-label="Employee email" />
-            <input readOnly value={tempCredentials.password} aria-label="Temporary password" />
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(tempCredentials.password);
-                } catch {
-                  // Ignore clipboard failures (permissions, insecure context).
-                }
-              }}
-            >
-              Copy password
-            </button>
-            <button type="button" className="ghost" onClick={() => setTempCredentials(null)}>
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-
-      {isHR && (
-        <EmployeeCreateForm
-          form={form}
-          onChange={handleFormChange}
-          onSubmit={handleSubmit}
-          disabled={loading}
+      <Routes>
+        <Route path="/" element={<Navigate to="overview" replace />} />
+        <Route
+          path="overview"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>Employees</h3>
+                <p className="metric">{employeeTotal || 0}</p>
+                <p className="inline-note">Total employee records</p>
+              </div>
+              <div className="card">
+                <h3>Visible now</h3>
+                <p className="metric">{employees.length}</p>
+                <p className="inline-note">Loaded in this view</p>
+              </div>
+              <div className="card">
+                <h3>Quick actions</h3>
+                <div className="row-actions">
+                  {isHR && <NavLink className="ghost-link" to="/employees/manage">Add employee</NavLink>}
+                  <NavLink className="ghost-link" to="/employees/org">View org chart</NavLink>
+                </div>
+              </div>
+            </div>
+          }
         />
-      )}
+        <Route
+          path="directory"
+          element={
+            <>
+              {loading && employees.length === 0 && (
+                <PageStatus title="Loading employees" description="Preparing people records and org data." />
+              )}
 
-      {isHR && (
-        <EmployeeEditForm
-          employeeOptions={employeeOptions}
-          departments={lookups.departments}
-          payGroups={lookups.payGroups}
-          editEmployee={editEmployee}
-          onSelectEmployee={handleSelectEmployee}
-          onFieldChange={(field, value) => setEditEmployee((prev) => ({ ...prev, [field]: value }))}
-          onSubmit={handleUpdateEmployee}
-          disabled={loading}
+              {!loading && employees.length === 0 ? (
+                <EmptyState
+                  title="No employees yet"
+                  description="Once employees are added, they will appear here with contact and status details."
+                />
+              ) : (
+                <EmployeeTable employees={employees} showPayGroup={isHR} payGroupById={payGroupById} />
+              )}
+
+              <div className="row-actions pagination">
+                <button type="button" className="ghost" onClick={prevEmployees} disabled={employeeOffset === 0}>
+                  Prev
+                </button>
+                <small>
+                  {employeeTotal ? `${Math.min(employeeOffset + EMPLOYEE_LIMIT, employeeTotal)} of ${employeeTotal}` : '—'}
+                </small>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={nextEmployees}
+                  disabled={employeeTotal ? employeeOffset + EMPLOYEE_LIMIT >= employeeTotal : employees.length < EMPLOYEE_LIMIT}
+                >
+                  Next
+                </button>
+              </div>
+            </>
+          }
         />
-      )}
+        {isHR && (
+          <Route
+            path="manage"
+            element={
+              <>
+                {tempCredentials && (
+                  <div className="card">
+                    <h3>Temporary login created</h3>
+                    <p>
+                      Share this once with the employee. It will not be shown again.
+                    </p>
+                    <div className="inline-form" style={{ marginTop: '12px' }}>
+                      <input readOnly value={tempCredentials.email} aria-label="Employee email" />
+                      <input readOnly value={tempCredentials.password} aria-label="Temporary password" />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(tempCredentials.password);
+                          } catch {
+                            // Ignore clipboard failures (permissions, insecure context).
+                          }
+                        }}
+                      >
+                        Copy password
+                      </button>
+                      <button type="button" className="ghost" onClick={() => setTempCredentials(null)}>
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
 
-      <ManagerHistory history={managerHistory} />
+                <EmployeeCreateForm
+                  form={form}
+                  onChange={handleFormChange}
+                  onSubmit={handleSubmit}
+                  disabled={loading}
+                />
 
-      {!loading && employees.length === 0 ? (
-        <EmptyState
-          title="No employees yet"
-          description="Once employees are added, they will appear here with contact and status details."
+                <EmployeeEditForm
+                  employeeOptions={employeeOptions}
+                  departments={lookups.departments}
+                  payGroups={lookups.payGroups}
+                  editEmployee={editEmployee}
+                  onSelectEmployee={handleSelectEmployee}
+                  onFieldChange={(field, value) => setEditEmployee((prev) => ({ ...prev, [field]: value }))}
+                  onSubmit={handleUpdateEmployee}
+                  disabled={loading}
+                />
+
+                <ManagerHistory history={managerHistory} />
+              </>
+            }
+          />
+        )}
+        <Route
+          path="org"
+          element={
+            <OrgChart orgChart={lookups.orgChart} />
+          }
         />
-      ) : (
-        <EmployeeTable employees={employees} showPayGroup={isHR} payGroupById={payGroupById} />
-      )}
-
-      <div className="row-actions pagination">
-        <button type="button" className="ghost" onClick={prevEmployees} disabled={employeeOffset === 0}>
-          Prev
-        </button>
-        <small>
-          {employeeTotal ? `${Math.min(employeeOffset + EMPLOYEE_LIMIT, employeeTotal)} of ${employeeTotal}` : '—'}
-        </small>
-        <button
-          type="button"
-          className="ghost"
-          onClick={nextEmployees}
-          disabled={employeeTotal ? employeeOffset + EMPLOYEE_LIMIT >= employeeTotal : employees.length < EMPLOYEE_LIMIT}
-        >
-          Next
-        </button>
-      </div>
-
-      <OrgChart orgChart={lookups.orgChart} />
-
-      {isHR && (
-        <RolePermissions
-          roles={lookups.roles}
-          permissions={lookups.permissions}
-          selectedRole={selectedRole}
-          selectedPerms={selectedPerms}
-          onSelectRole={handleSelectRole}
-          onTogglePerm={togglePermission}
-          onSave={handleSaveRole}
-          disabled={loading}
-        />
-      )}
+        {isHR && (
+          <Route
+            path="access"
+            element={
+              <RolePermissions
+                roles={lookups.roles}
+                permissions={lookups.permissions}
+                selectedRole={selectedRole}
+                selectedPerms={selectedPerms}
+                onSelectRole={handleSelectRole}
+                onTogglePerm={togglePermission}
+                onSave={handleSaveRole}
+                disabled={loading}
+              />
+            }
+          />
+        )}
+        <Route path="*" element={<Navigate to="overview" replace />} />
+      </Routes>
     </section>
   );
 }

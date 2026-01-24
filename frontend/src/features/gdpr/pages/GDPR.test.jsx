@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import GDPR from './GDPR.jsx';
 import { api } from '../../../services/apiClient.js';
@@ -32,7 +33,13 @@ describe('GDPR page', () => {
     api.getWithMeta.mockResolvedValue({ data: [], total: 0 });
     api.post.mockResolvedValue({ id: 'dsar-1' });
 
-    render(<GDPR />);
+    render(
+      <MemoryRouter initialEntries={['/gdpr/dsar']}>
+        <Routes>
+          <Route path="/gdpr/*" element={<GDPR />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     const input = await screen.findByPlaceholderText(/employee id/i);
     await userEvent.type(input, 'emp-1');

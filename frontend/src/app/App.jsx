@@ -54,12 +54,12 @@ function AppShell() {
         <div className="content-inner">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/employees" element={<Employees />} />
-            <Route path="/leave" element={<Leave />} />
-            <Route path="/payroll" element={<Payroll />} />
-            <Route path="/performance" element={<Performance />} />
-            <Route path="/gdpr" element={<GDPR />} />
-            <Route path="/reports" element={<Reports />} />
+            <Route path="/employees/*" element={<Employees />} />
+            <Route path="/leave/*" element={<Leave />} />
+            <Route path="/payroll/*" element={<Payroll />} />
+            <Route path="/performance/*" element={<Performance />} />
+            <Route path="/gdpr/*" element={<GDPR />} />
+            <Route path="/reports/*" element={<Reports />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route
               path="/audit"

@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import Payroll from './Payroll.jsx';
 import { api } from '../../../services/apiClient.js';
@@ -31,7 +32,13 @@ describe('Payroll page', () => {
     api.get.mockResolvedValue([]);
     api.post.mockResolvedValue({ id: 'schedule-1' });
 
-    render(<Payroll />);
+    render(
+      <MemoryRouter initialEntries={['/payroll/setup']}>
+        <Routes>
+          <Route path="/payroll/*" element={<Payroll />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     const nameInput = await screen.findByPlaceholderText('Schedule name');
     await userEvent.type(nameInput, 'Monthly');

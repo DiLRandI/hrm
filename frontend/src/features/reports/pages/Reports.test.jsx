@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import userEvent from '@testing-library/user-event';
 import Reports from './Reports.jsx';
 import { api } from '../../../services/apiClient.js';
@@ -45,7 +46,13 @@ describe('Reports page', () => {
     });
     api.download.mockResolvedValue({ blob: new Blob(['a']), filename: 'report.csv' });
 
-    render(<Reports />);
+    render(
+      <MemoryRouter initialEntries={['/reports/jobs']}>
+        <Routes>
+          <Route path="/reports/*" element={<Reports />} />
+        </Routes>
+      </MemoryRouter>,
+    );
 
     const exportBtn = await screen.findByRole('button', { name: /export csv/i });
     await userEvent.click(exportBtn);

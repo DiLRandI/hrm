@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import {
@@ -247,284 +248,369 @@ export default function Performance() {
 
       {error && <div className="error">{error}</div>}
 
-      <div className="card-grid">
-        <div className="card">
-          <h3>Goals</h3>
-          <form className="stack" onSubmit={submitGoal}>
-            <input placeholder="Goal title" value={goalForm.title} onChange={(e) => setGoalForm({ ...goalForm, title: e.target.value })} />
-            <input placeholder="Metric" value={goalForm.metric} onChange={(e) => setGoalForm({ ...goalForm, metric: e.target.value })} />
-            <input type="date" value={goalForm.dueDate} onChange={(e) => setGoalForm({ ...goalForm, dueDate: e.target.value })} />
-            <input type="number" step="0.1" placeholder="Weight" value={goalForm.weight} onChange={(e) => setGoalForm({ ...goalForm, weight: e.target.value })} />
-            <button type="submit">Add goal</button>
-          </form>
-          <div className="table">
-            <div className="table-row header">
-              <span>Title</span>
-              <span>Due</span>
-              <span>Status</span>
-            </div>
-            {goals.map((goal) => (
-              <div key={goal.id} className="table-row">
-                <span>{goal.title}</span>
-                <span>{goal.dueDate?.slice(0, 10)}</span>
-                <span>{goal.status}</span>
+      <nav className="subnav">
+        <NavLink to="/performance/overview">Overview</NavLink>
+        <NavLink to="/performance/goals">Goals</NavLink>
+        <NavLink to="/performance/reviews">Reviews</NavLink>
+        <NavLink to="/performance/feedback">Feedback</NavLink>
+        <NavLink to="/performance/checkins">Check-ins</NavLink>
+        {(isHR || isManager) && <NavLink to="/performance/pips">PIPs</NavLink>}
+        {canViewSummary && <NavLink to="/performance/summary">Summary</NavLink>}
+      </nav>
+
+      <Routes>
+        <Route path="/" element={<Navigate to="overview" replace />} />
+        <Route
+          path="overview"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>Goals</h3>
+                <p className="metric">{goals.length}</p>
+                <p className="inline-note">Active goals tracked</p>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {isHR && (
-          <div className="card">
-            <h3>Review templates</h3>
-            <form className="stack" onSubmit={submitTemplate}>
-              <input placeholder="Template name" value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} />
-              <textarea
-                placeholder='Rating scale JSON, e.g. [{"label":"Exceeds","value":5}]'
-                value={templateForm.ratingScale}
-                onChange={(e) => setTemplateForm({ ...templateForm, ratingScale: e.target.value })}
-              />
-              <textarea
-                placeholder='Questions JSON, e.g. [{"question":"What went well?"}]'
-                value={templateForm.questions}
-                onChange={(e) => setTemplateForm({ ...templateForm, questions: e.target.value })}
-              />
-              <button type="submit">Add template</button>
-            </form>
-            <div className="list">
-              {templates.map((template) => (
-                <div key={template.id} className="list-item">
-                  <div>
-                    <strong>{template.name}</strong>
-                  </div>
-                  <small>{template.createdAt?.slice(0, 10)}</small>
+              <div className="card">
+                <h3>Review tasks</h3>
+                <p className="metric">{tasks.length}</p>
+                <p className="inline-note">Tasks awaiting action</p>
+              </div>
+              <div className="card">
+                <h3>Feedback</h3>
+                <p className="metric">{feedback.length}</p>
+                <p className="inline-note">Recent feedback entries</p>
+              </div>
+              <div className="card">
+                <h3>Quick actions</h3>
+                <div className="row-actions">
+                  <NavLink className="ghost-link" to="/performance/goals">Add goal</NavLink>
+                  <NavLink className="ghost-link" to="/performance/reviews">Review tasks</NavLink>
                 </div>
-              ))}
+              </div>
             </div>
-          </div>
-        )}
-
-        {(isHR || isManager) && (
-          <div className="card">
-            <h3>Review cycles</h3>
-            {isHR && (
-              <form className="stack" onSubmit={submitCycle}>
-                <input placeholder="Cycle name" value={cycleForm.name} onChange={(e) => setCycleForm({ ...cycleForm, name: e.target.value })} />
-                <input type="date" value={cycleForm.startDate} onChange={(e) => setCycleForm({ ...cycleForm, startDate: e.target.value })} />
-                <input type="date" value={cycleForm.endDate} onChange={(e) => setCycleForm({ ...cycleForm, endDate: e.target.value })} />
-                <select value={cycleForm.templateId} onChange={(e) => setCycleForm({ ...cycleForm, templateId: e.target.value })}>
-                  <option value="">Select template</option>
-                  {templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name}
-                    </option>
+          }
+        />
+        <Route
+          path="goals"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>Goals</h3>
+                <form className="stack" onSubmit={submitGoal}>
+                  <input placeholder="Goal title" value={goalForm.title} onChange={(e) => setGoalForm({ ...goalForm, title: e.target.value })} />
+                  <input placeholder="Metric" value={goalForm.metric} onChange={(e) => setGoalForm({ ...goalForm, metric: e.target.value })} />
+                  <input type="date" value={goalForm.dueDate} onChange={(e) => setGoalForm({ ...goalForm, dueDate: e.target.value })} />
+                  <input type="number" step="0.1" placeholder="Weight" value={goalForm.weight} onChange={(e) => setGoalForm({ ...goalForm, weight: e.target.value })} />
+                  <button type="submit">Add goal</button>
+                </form>
+                <div className="table">
+                  <div className="table-row header">
+                    <span>Title</span>
+                    <span>Due</span>
+                    <span>Status</span>
+                  </div>
+                  {goals.map((goal) => (
+                    <div key={goal.id} className="table-row">
+                      <span>{goal.title}</span>
+                      <span>{goal.dueDate?.slice(0, 10)}</span>
+                      <span>{goal.status}</span>
+                    </div>
                   ))}
-                </select>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={cycleForm.hrRequired}
-                    onChange={(e) => setCycleForm({ ...cycleForm, hrRequired: e.target.checked })}
-                  />
-                  Require HR final review
-                </label>
-                <button type="submit">Create cycle</button>
-              </form>
-            )}
-            <div className="table">
-              <div className="table-row header">
-                <span>Name</span>
-                <span>Status</span>
-                <span>Dates</span>
-                <span>HR review</span>
-                <span>Actions</span>
-              </div>
-              {cycles.map((cycle) => (
-                <div key={cycle.id} className="table-row">
-                  <span>{cycle.name}</span>
-                  <span>{cycle.status}</span>
-                  <span>{cycle.startDate?.slice(0, 10)} → {cycle.endDate?.slice(0, 10)}</span>
-                  <span>{cycle.hrRequired ? 'Required' : 'No'}</span>
-                  <span className="row-actions">
-                    {isHR && cycle.status !== REVIEW_CYCLE_CLOSED && (
-                      <button onClick={() => finalizeCycle(cycle.id)}>Finalize</button>
-                    )}
-                  </span>
                 </div>
-              ))}
+              </div>
             </div>
-          </div>
-        )}
-
-        <div className="card">
-          <h3>Review tasks</h3>
-          <form className="stack" onSubmit={submitReview}>
-            <select value={reviewForm.taskId} onChange={(e) => setReviewForm({ ...reviewForm, taskId: e.target.value })}>
-              <option value="">Select task</option>
-              {tasks.map((task) => (
-                <option key={task.id} value={task.id}>
-                  {task.id} ({task.status || REVIEW_TASK_ASSIGNED})
-                </option>
-              ))}
-            </select>
-            {templateRatings.length > 0 ? (
-              <select
-                value={reviewForm.rating}
-                onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
-              >
-                <option value="">Select rating</option>
-                {templateRatings.map((rating) => (
-                  <option key={rating.value ?? rating.label} value={rating.value}>
-                    {rating.label ?? rating.value}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="number"
-                step="0.1"
-                placeholder="Rating (optional)"
-                value={reviewForm.rating}
-                onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
-              />
-            )}
-            {templateQuestions.length > 0 ? (
-              templateQuestions.map((question, idx) => (
-                <label key={question.id || idx} className="stack">
-                  <span className="hint">{question.question || question.label || `Question ${idx + 1}`}</span>
-                  <textarea
-                    value={reviewAnswers[idx] || ''}
-                    onChange={(e) => {
-                      const next = [...reviewAnswers];
-                      next[idx] = e.target.value;
-                      setReviewAnswers(next);
-                    }}
-                    required
-                  />
-                </label>
-              ))
-            ) : (
-              <textarea
-                placeholder="Comments"
-                value={reviewAnswers[0] || ''}
-                onChange={(e) => setReviewAnswers([e.target.value])}
-              />
-            )}
-            <button type="submit">Submit review</button>
-          </form>
-          <div className="table">
-            <div className="table-row header">
-              <span>Employee</span>
-              <span>Status</span>
-              <span>Due</span>
-            </div>
-            {tasks.map((task) => (
-              <div key={task.id} className="table-row">
-                <span>{employeeLookup[task.employeeId] || task.employeeId}</span>
-                <span>{task.status}</span>
-                <span>{task.selfDue || task.managerDue || task.hrDue || '—'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <h3>Feedback</h3>
-          <form className="stack" onSubmit={submitFeedback}>
-            <input placeholder="Employee ID" value={feedbackForm.toEmployeeId} onChange={(e) => setFeedbackForm({ ...feedbackForm, toEmployeeId: e.target.value })} required />
-            <select value={feedbackForm.type} onChange={(e) => setFeedbackForm({ ...feedbackForm, type: e.target.value })}>
-              {FEEDBACK_TYPES.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
-            <textarea placeholder="Message" value={feedbackForm.message} onChange={(e) => setFeedbackForm({ ...feedbackForm, message: e.target.value })} required />
-            <input placeholder="Related goal ID (optional)" value={feedbackForm.relatedGoalId} onChange={(e) => setFeedbackForm({ ...feedbackForm, relatedGoalId: e.target.value })} />
-            <button type="submit">Add feedback</button>
-          </form>
-          <div className="list">
-            {feedback.map((item) => (
-              <div key={item.id} className="list-item">
-                <div>
-                  <strong>{item.type}</strong>
-                  <p>{item.message}</p>
-                </div>
-                <small>{item.createdAt?.slice(0, 10)}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <h3>Check-ins</h3>
-          <form className="stack" onSubmit={submitCheckin}>
-            <input placeholder="Employee ID" value={checkinForm.employeeId} onChange={(e) => setCheckinForm({ ...checkinForm, employeeId: e.target.value })} required />
-            <textarea placeholder="Notes" value={checkinForm.notes} onChange={(e) => setCheckinForm({ ...checkinForm, notes: e.target.value })} required />
-            <label className="checkbox">
-              <input type="checkbox" checked={checkinForm.private} onChange={(e) => setCheckinForm({ ...checkinForm, private: e.target.checked })} />
-              Private
-            </label>
-            <button type="submit">Add check-in</button>
-          </form>
-          <div className="list">
-            {checkins.map((item) => (
-              <div key={item.id} className="list-item">
-                <div>
-                  <strong>{employeeLookup[item.employeeId] || item.employeeId}</strong>
-                  <p>{item.notes}</p>
-                </div>
-                <small>{item.createdAt?.slice(0, 10)}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {(isHR || isManager) && (
-          <div className="card">
-            <h3>PIPs</h3>
-            <form className="stack" onSubmit={submitPip}>
-              <input placeholder="Employee ID" value={pipForm.employeeId} onChange={(e) => setPipForm({ ...pipForm, employeeId: e.target.value })} required />
-              <textarea placeholder='Objectives JSON' value={pipForm.objectives} onChange={(e) => setPipForm({ ...pipForm, objectives: e.target.value })} />
-              <textarea placeholder='Milestones JSON' value={pipForm.milestones} onChange={(e) => setPipForm({ ...pipForm, milestones: e.target.value })} />
-              <textarea placeholder='Review dates JSON' value={pipForm.reviewDates} onChange={(e) => setPipForm({ ...pipForm, reviewDates: e.target.value })} />
-              <button type="submit">Create PIP</button>
-            </form>
-            <div className="table">
-              <div className="table-row header">
-                <span>Employee</span>
-                <span>Status</span>
-                <span>Actions</span>
-              </div>
-              {pips.map((pip) => (
-                <div key={pip.id} className="table-row">
-                  <span>{employeeLookup[pip.employeeId] || pip.employeeId}</span>
-                  <span>{pip.status}</span>
-                  <span className="row-actions">
-                    {pip.status !== PIP_STATUS_CLOSED && <button onClick={() => closePip(pip.id)}>Close</button>}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {canViewSummary && summary && (
-          <div className="card">
-            <h3>Summary</h3>
-            <p><strong>Goals completed:</strong> {summary.goalsCompleted} / {summary.goalsTotal}</p>
-            <p><strong>Review tasks completed:</strong> {summary.reviewTasksCompleted} / {summary.reviewTasksTotal}</p>
-            <p><strong>Review completion rate:</strong> {(summary.reviewCompletionRate || 0) * 100}%</p>
-            {summary.ratingDistribution && (
-              <div className="list">
-                {Object.entries(summary.ratingDistribution).map(([rating, count]) => (
-                  <div key={rating} className="list-item">
-                    <strong>Rating {rating}</strong>
-                    <span>{count}</span>
+          }
+        />
+        <Route
+          path="reviews"
+          element={
+            <div className="card-grid">
+              {isHR && (
+                <div className="card">
+                  <h3>Review templates</h3>
+                  <form className="stack" onSubmit={submitTemplate}>
+                    <input placeholder="Template name" value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} />
+                    <textarea
+                      placeholder='Rating scale JSON, e.g. [{"label":"Exceeds","value":5}]'
+                      value={templateForm.ratingScale}
+                      onChange={(e) => setTemplateForm({ ...templateForm, ratingScale: e.target.value })}
+                    />
+                    <textarea
+                      placeholder='Questions JSON, e.g. [{"question":"What went well?"}]'
+                      value={templateForm.questions}
+                      onChange={(e) => setTemplateForm({ ...templateForm, questions: e.target.value })}
+                    />
+                    <button type="submit">Add template</button>
+                  </form>
+                  <div className="list">
+                    {templates.map((template) => (
+                      <div key={template.id} className="list-item">
+                        <div>
+                          <strong>{template.name}</strong>
+                        </div>
+                        <small>{template.createdAt?.slice(0, 10)}</small>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+              )}
+
+              {(isHR || isManager) && (
+                <div className="card">
+                  <h3>Review cycles</h3>
+                  {isHR && (
+                    <form className="stack" onSubmit={submitCycle}>
+                      <input placeholder="Cycle name" value={cycleForm.name} onChange={(e) => setCycleForm({ ...cycleForm, name: e.target.value })} />
+                      <input type="date" value={cycleForm.startDate} onChange={(e) => setCycleForm({ ...cycleForm, startDate: e.target.value })} />
+                      <input type="date" value={cycleForm.endDate} onChange={(e) => setCycleForm({ ...cycleForm, endDate: e.target.value })} />
+                      <select value={cycleForm.templateId} onChange={(e) => setCycleForm({ ...cycleForm, templateId: e.target.value })}>
+                        <option value="">Select template</option>
+                        {templates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name}
+                          </option>
+                        ))}
+                      </select>
+                      <label className="checkbox">
+                        <input
+                          type="checkbox"
+                          checked={cycleForm.hrRequired}
+                          onChange={(e) => setCycleForm({ ...cycleForm, hrRequired: e.target.checked })}
+                        />
+                        Require HR final review
+                      </label>
+                      <button type="submit">Create cycle</button>
+                    </form>
+                  )}
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Name</span>
+                      <span>Status</span>
+                      <span>Dates</span>
+                      <span>HR review</span>
+                      <span>Actions</span>
+                    </div>
+                    {cycles.map((cycle) => (
+                      <div key={cycle.id} className="table-row">
+                        <span>{cycle.name}</span>
+                        <span>{cycle.status}</span>
+                        <span>{cycle.startDate?.slice(0, 10)} → {cycle.endDate?.slice(0, 10)}</span>
+                        <span>{cycle.hrRequired ? 'Required' : 'No'}</span>
+                        <span className="row-actions">
+                          {isHR && cycle.status !== REVIEW_CYCLE_CLOSED && (
+                            <button onClick={() => finalizeCycle(cycle.id)}>Finalize</button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="card">
+                <h3>Review tasks</h3>
+                <form className="stack" onSubmit={submitReview}>
+                  <select value={reviewForm.taskId} onChange={(e) => setReviewForm({ ...reviewForm, taskId: e.target.value })}>
+                    <option value="">Select task</option>
+                    {tasks.map((task) => (
+                      <option key={task.id} value={task.id}>
+                        {task.id} ({task.status || REVIEW_TASK_ASSIGNED})
+                      </option>
+                    ))}
+                  </select>
+                  {templateRatings.length > 0 ? (
+                    <select
+                      value={reviewForm.rating}
+                      onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
+                    >
+                      <option value="">Select rating</option>
+                      {templateRatings.map((rating) => (
+                        <option key={rating.value ?? rating.label} value={rating.value}>
+                          {rating.label ?? rating.value}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type="number"
+                      step="0.1"
+                      placeholder="Rating (optional)"
+                      value={reviewForm.rating}
+                      onChange={(e) => setReviewForm({ ...reviewForm, rating: e.target.value })}
+                    />
+                  )}
+                  {templateQuestions.length > 0 ? (
+                    templateQuestions.map((question, idx) => (
+                      <label key={question.id || idx} className="stack">
+                        <span className="hint">{question.question || question.label || `Question ${idx + 1}`}</span>
+                        <textarea
+                          value={reviewAnswers[idx] || ''}
+                          onChange={(e) => {
+                            const next = [...reviewAnswers];
+                            next[idx] = e.target.value;
+                            setReviewAnswers(next);
+                          }}
+                          required
+                        />
+                      </label>
+                    ))
+                  ) : (
+                    <textarea
+                      placeholder="Comments"
+                      value={reviewAnswers[0] || ''}
+                      onChange={(e) => setReviewAnswers([e.target.value])}
+                    />
+                  )}
+                  <button type="submit">Submit review</button>
+                </form>
+                <div className="table">
+                  <div className="table-row header">
+                    <span>Employee</span>
+                    <span>Status</span>
+                    <span>Due</span>
+                  </div>
+                  {tasks.map((task) => (
+                    <div key={task.id} className="table-row">
+                      <span>{employeeLookup[task.employeeId] || task.employeeId}</span>
+                      <span>{task.status}</span>
+                      <span>{task.selfDue || task.managerDue || task.hrDue || '—'}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-            )}
-          </div>
+            </div>
+          }
+        />
+        <Route
+          path="feedback"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>Feedback</h3>
+                <form className="stack" onSubmit={submitFeedback}>
+                  <input placeholder="Employee ID" value={feedbackForm.toEmployeeId} onChange={(e) => setFeedbackForm({ ...feedbackForm, toEmployeeId: e.target.value })} required />
+                  <select value={feedbackForm.type} onChange={(e) => setFeedbackForm({ ...feedbackForm, type: e.target.value })}>
+                    {FEEDBACK_TYPES.map((item) => (
+                      <option key={item.value} value={item.value}>{item.label}</option>
+                    ))}
+                  </select>
+                  <textarea placeholder="Message" value={feedbackForm.message} onChange={(e) => setFeedbackForm({ ...feedbackForm, message: e.target.value })} required />
+                  <input placeholder="Related goal ID (optional)" value={feedbackForm.relatedGoalId} onChange={(e) => setFeedbackForm({ ...feedbackForm, relatedGoalId: e.target.value })} />
+                  <button type="submit">Add feedback</button>
+                </form>
+                <div className="list">
+                  {feedback.map((item) => (
+                    <div key={item.id} className="list-item">
+                      <div>
+                        <strong>{item.type}</strong>
+                        <p>{item.message}</p>
+                      </div>
+                      <small>{item.createdAt?.slice(0, 10)}</small>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          }
+        />
+        <Route
+          path="checkins"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>Check-ins</h3>
+                <form className="stack" onSubmit={submitCheckin}>
+                  <input placeholder="Employee ID" value={checkinForm.employeeId} onChange={(e) => setCheckinForm({ ...checkinForm, employeeId: e.target.value })} required />
+                  <textarea placeholder="Notes" value={checkinForm.notes} onChange={(e) => setCheckinForm({ ...checkinForm, notes: e.target.value })} required />
+                  <label className="checkbox">
+                    <input type="checkbox" checked={checkinForm.private} onChange={(e) => setCheckinForm({ ...checkinForm, private: e.target.checked })} />
+                    Private
+                  </label>
+                  <button type="submit">Add check-in</button>
+                </form>
+                <div className="list">
+                  {checkins.map((item) => (
+                    <div key={item.id} className="list-item">
+                      <div>
+                        <strong>{employeeLookup[item.employeeId] || item.employeeId}</strong>
+                        <p>{item.notes}</p>
+                      </div>
+                      <small>{item.createdAt?.slice(0, 10)}</small>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          }
+        />
+        {(isHR || isManager) && (
+          <Route
+            path="pips"
+            element={
+              <div className="card-grid">
+                <div className="card">
+                  <h3>PIPs</h3>
+                  <form className="stack" onSubmit={submitPip}>
+                    <input placeholder="Employee ID" value={pipForm.employeeId} onChange={(e) => setPipForm({ ...pipForm, employeeId: e.target.value })} required />
+                    <textarea placeholder="Objectives JSON" value={pipForm.objectives} onChange={(e) => setPipForm({ ...pipForm, objectives: e.target.value })} />
+                    <textarea placeholder="Milestones JSON" value={pipForm.milestones} onChange={(e) => setPipForm({ ...pipForm, milestones: e.target.value })} />
+                    <textarea placeholder="Review dates JSON" value={pipForm.reviewDates} onChange={(e) => setPipForm({ ...pipForm, reviewDates: e.target.value })} />
+                    <button type="submit">Create PIP</button>
+                  </form>
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Employee</span>
+                      <span>Status</span>
+                      <span>Actions</span>
+                    </div>
+                    {pips.map((pip) => (
+                      <div key={pip.id} className="table-row">
+                        <span>{employeeLookup[pip.employeeId] || pip.employeeId}</span>
+                        <span>{pip.status}</span>
+                        <span className="row-actions">
+                          {pip.status !== PIP_STATUS_CLOSED && <button onClick={() => closePip(pip.id)}>Close</button>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            }
+          />
         )}
-      </div>
+        {canViewSummary && (
+          <Route
+            path="summary"
+            element={
+              <div className="card-grid">
+                {summary ? (
+                  <div className="card">
+                    <h3>Summary</h3>
+                    <p><strong>Goals completed:</strong> {summary.goalsCompleted} / {summary.goalsTotal}</p>
+                    <p><strong>Review tasks completed:</strong> {summary.reviewTasksCompleted} / {summary.reviewTasksTotal}</p>
+                    <p><strong>Review completion rate:</strong> {(summary.reviewCompletionRate || 0) * 100}%</p>
+                    {summary.ratingDistribution && (
+                      <div className="list">
+                        {Object.entries(summary.ratingDistribution).map(([rating, count]) => (
+                          <div key={rating} className="list-item">
+                            <strong>Rating {rating}</strong>
+                            <span>{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="card">
+                    <h3>Summary</h3>
+                    <p>No summary yet.</p>
+                  </div>
+                )}
+              </div>
+            }
+          />
+        )}
+        <Route path="*" element={<Navigate to="overview" replace />} />
+      </Routes>
     </section>
   );
 }

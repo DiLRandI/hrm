@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { NavLink, Navigate, Route, Routes } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR } from '../../../shared/constants/roles.js';
@@ -262,241 +263,323 @@ export default function GDPR() {
       {error && <div className="error">{error}</div>}
       {message && <div className="success">{message}</div>}
 
-      <div className="card-grid">
-        <div className="card">
-          <h3>DSAR exports</h3>
-          <form className="inline-form" onSubmit={requestExport}>
-            <input
-              placeholder="Employee ID (optional)"
-              value={dsarEmployeeId}
-              onChange={(e) => setDsarEmployeeId(e.target.value)}
-            />
-            <button type="submit">Request export</button>
-          </form>
-          <div className="table">
-            <div className="table-row header">
-              <span>Employee</span>
-              <span>Status</span>
-              <span>Actions</span>
-            </div>
-            {dsars.map((dsar) => (
-              <div key={dsar.id} className="table-row">
-                <span>{dsar.employeeId}</span>
-                <span>{dsar.status}</span>
-                <span className="row-actions">
-                  {dsar.status === DSAR_STATUS_COMPLETED && (dsar.downloadToken || dsar.filePath) ? (
-                    <button onClick={() => downloadExport(dsar.id, dsar.downloadToken)}>Download</button>
-                  ) : (
-                    <small>Pending</small>
-                  )}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div className="row-actions pagination">
-            <button type="button" className="ghost" onClick={prevDsarPage} disabled={dsarOffset === 0}>
-              Prev
-            </button>
-            <small>
-              {dsarTotal ? `${Math.min(dsarOffset + DSAR_LIMIT, dsarTotal)} of ${dsarTotal}` : '—'}
-            </small>
-            <button
-              type="button"
-              className="ghost"
-              onClick={nextDsarPage}
-              disabled={dsarTotal ? dsarOffset + DSAR_LIMIT >= dsarTotal : dsars.length < DSAR_LIMIT}
-            >
-              Next
-            </button>
-          </div>
-        </div>
+      <nav className="subnav">
+        <NavLink to="/gdpr/overview">Overview</NavLink>
+        <NavLink to="/gdpr/dsar">DSAR exports</NavLink>
+        {isHR && <NavLink to="/gdpr/retention">Retention</NavLink>}
+        {isHR && <NavLink to="/gdpr/consent">Consent</NavLink>}
+        {isHR && <NavLink to="/gdpr/anonymization">Anonymization</NavLink>}
+        {isHR && <NavLink to="/gdpr/access-logs">Access logs</NavLink>}
+      </nav>
 
+      <Routes>
+        <Route path="/" element={<Navigate to="overview" replace />} />
+        <Route
+          path="overview"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>DSAR exports</h3>
+                <p className="metric">{dsarTotal || 0}</p>
+                <p className="inline-note">Total export requests</p>
+              </div>
+              {isHR && (
+                <>
+                  <div className="card">
+                    <h3>Retention policies</h3>
+                    <p className="metric">{retentionPolicies.length}</p>
+                    <p className="inline-note">Active data categories</p>
+                  </div>
+                  <div className="card">
+                    <h3>Anonymization</h3>
+                    <p className="metric">
+                      {anonymizationJobs.filter((job) => job.status === ANONYMIZATION_STATUS_REQUESTED).length}
+                    </p>
+                    <p className="inline-note">Requests awaiting execution</p>
+                  </div>
+                </>
+              )}
+              <div className="card">
+                <h3>Quick actions</h3>
+                <div className="row-actions">
+                  <NavLink className="ghost-link" to="/gdpr/dsar">Request DSAR</NavLink>
+                  {isHR && <NavLink className="ghost-link" to="/gdpr/retention">Run retention</NavLink>}
+                  {isHR && <NavLink className="ghost-link" to="/gdpr/anonymization">Anonymize</NavLink>}
+                </div>
+              </div>
+            </div>
+          }
+        />
+        <Route
+          path="dsar"
+          element={
+            <div className="card-grid">
+              <div className="card">
+                <h3>DSAR exports</h3>
+                <form className="inline-form" onSubmit={requestExport}>
+                  <input
+                    placeholder="Employee ID (optional)"
+                    value={dsarEmployeeId}
+                    onChange={(e) => setDsarEmployeeId(e.target.value)}
+                  />
+                  <button type="submit">Request export</button>
+                </form>
+                <div className="table">
+                  <div className="table-row header">
+                    <span>Employee</span>
+                    <span>Status</span>
+                    <span>Actions</span>
+                  </div>
+                  {dsars.map((dsar) => (
+                    <div key={dsar.id} className="table-row">
+                      <span>{dsar.employeeId}</span>
+                      <span>{dsar.status}</span>
+                      <span className="row-actions">
+                        {dsar.status === DSAR_STATUS_COMPLETED && (dsar.downloadToken || dsar.filePath) ? (
+                          <button onClick={() => downloadExport(dsar.id, dsar.downloadToken)}>Download</button>
+                        ) : (
+                          <small>Pending</small>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="row-actions pagination">
+                  <button type="button" className="ghost" onClick={prevDsarPage} disabled={dsarOffset === 0}>
+                    Prev
+                  </button>
+                  <small>
+                    {dsarTotal ? `${Math.min(dsarOffset + DSAR_LIMIT, dsarTotal)} of ${dsarTotal}` : '—'}
+                  </small>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={nextDsarPage}
+                    disabled={dsarTotal ? dsarOffset + DSAR_LIMIT >= dsarTotal : dsars.length < DSAR_LIMIT}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </div>
+          }
+        />
         {isHR && (
-          <>
-            <div className="card">
-              <h3>Retention policies</h3>
-              <form className="stack" onSubmit={saveRetentionPolicy}>
-                <select
-                  value={retentionForm.dataCategory}
-                  onChange={(e) => setRetentionForm({ ...retentionForm, dataCategory: e.target.value })}
-                >
-                  {GDPR_DATA_CATEGORIES.map((category) => (
-                    <option key={category.value} value={category.value}>{category.label}</option>
-                  ))}
-                </select>
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="Retention days"
-                  value={retentionForm.retentionDays}
-                  onChange={(e) => setRetentionForm({ ...retentionForm, retentionDays: e.target.value })}
-                />
-                <button type="submit">Save policy</button>
-              </form>
-              <div className="table">
-                <div className="table-row header">
-                  <span>Category</span>
-                  <span>Days</span>
-                </div>
-                {retentionPolicies.map((policy) => (
-                  <div key={policy.id} className="table-row">
-                    <span>{policy.dataCategory}</span>
-                    <span>{policy.retentionDays}</span>
+          <Route
+            path="retention"
+            element={
+              <div className="card-grid">
+                <div className="card">
+                  <h3>Retention policies</h3>
+                  <form className="stack" onSubmit={saveRetentionPolicy}>
+                    <select
+                      value={retentionForm.dataCategory}
+                      onChange={(e) => setRetentionForm({ ...retentionForm, dataCategory: e.target.value })}
+                    >
+                      {GDPR_DATA_CATEGORIES.map((category) => (
+                        <option key={category.value} value={category.value}>{category.label}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      placeholder="Retention days"
+                      value={retentionForm.retentionDays}
+                      onChange={(e) => setRetentionForm({ ...retentionForm, retentionDays: e.target.value })}
+                    />
+                    <button type="submit">Save policy</button>
+                  </form>
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Category</span>
+                      <span>Days</span>
+                    </div>
+                    {retentionPolicies.map((policy) => (
+                      <div key={policy.id} className="table-row">
+                        <span>{policy.dataCategory}</span>
+                        <span>{policy.retentionDays}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
+                </div>
 
-            <div className="card">
-              <h3>Consent records</h3>
-              <form className="stack" onSubmit={saveConsent}>
-                <input
-                  placeholder="Employee ID"
-                  value={consentForm.employeeId}
-                  onChange={(e) => setConsentForm({ ...consentForm, employeeId: e.target.value })}
-                  required
-                />
-                <input
-                  placeholder="Consent type"
-                  value={consentForm.consentType}
-                  onChange={(e) => setConsentForm({ ...consentForm, consentType: e.target.value })}
-                  required
-                />
-                <button type="submit">Record consent</button>
-              </form>
-              <div className="table">
-                <div className="table-row header">
-                  <span>Employee</span>
-                  <span>Type</span>
-                  <span>Status</span>
-                  <span>Actions</span>
-                </div>
-                {consents.map((consent) => (
-                  <div key={consent.id} className="table-row">
-                    <span>{consent.employeeId}</span>
-                    <span>{consent.consentType}</span>
-                    <span>{consent.revokedAt ? 'Revoked' : 'Granted'}</span>
-                    <span className="row-actions">
-                      {!consent.revokedAt && (
-                        <button type="button" className="ghost" onClick={() => revokeConsent(consent.id)}>
-                          Revoke
-                        </button>
-                      )}
-                    </span>
+                <div className="card">
+                  <h3>Retention runs</h3>
+                  <form className="stack" onSubmit={runRetention}>
+                    <select
+                      value={retentionRun.dataCategory}
+                      onChange={(e) => setRetentionRun({ dataCategory: e.target.value })}
+                    >
+                      <option value="">All categories</option>
+                      {GDPR_DATA_CATEGORIES.map((category) => (
+                        <option key={category.value} value={category.value}>{category.label}</option>
+                      ))}
+                    </select>
+                    <button type="submit">Run retention</button>
+                  </form>
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Category</span>
+                      <span>Status</span>
+                      <span>Deleted</span>
+                    </div>
+                    {retentionRuns.map((run) => (
+                      <div key={run.id} className="table-row">
+                        <span>{run.dataCategory}</span>
+                        <span>{run.status}</span>
+                        <span>{run.deletedCount}</span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="card">
-              <h3>Retention runs</h3>
-              <form className="stack" onSubmit={runRetention}>
-                <select
-                  value={retentionRun.dataCategory}
-                  onChange={(e) => setRetentionRun({ dataCategory: e.target.value })}
-                >
-                  <option value="">All categories</option>
-                  {GDPR_DATA_CATEGORIES.map((category) => (
-                    <option key={category.value} value={category.value}>{category.label}</option>
-                  ))}
-                </select>
-                <button type="submit">Run retention</button>
-              </form>
-              <div className="table">
-                <div className="table-row header">
-                  <span>Category</span>
-                  <span>Status</span>
-                  <span>Deleted</span>
                 </div>
-                {retentionRuns.map((run) => (
-                  <div key={run.id} className="table-row">
-                    <span>{run.dataCategory}</span>
-                    <span>{run.status}</span>
-                    <span>{run.deletedCount}</span>
-                  </div>
-                ))}
               </div>
-            </div>
-
-            <div className="card">
-              <h3>Anonymization</h3>
-              <form className="stack" onSubmit={requestAnonymization}>
-                <input
-                  placeholder="Employee ID"
-                  value={anonymizeForm.employeeId}
-                  onChange={(e) => setAnonymizeForm({ ...anonymizeForm, employeeId: e.target.value })}
-                  required
-                />
-                <input
-                  placeholder="Reason"
-                  value={anonymizeForm.reason}
-                  onChange={(e) => setAnonymizeForm({ ...anonymizeForm, reason: e.target.value })}
-                />
-                <button type="submit">Request anonymization</button>
-              </form>
-              <div className="table">
-                <div className="table-row header">
-                  <span>Employee</span>
-                  <span>Status</span>
-                  <span>Actions</span>
-                </div>
-                {anonymizationJobs.map((job) => (
-                  <div key={job.id} className="table-row">
-                    <span>{job.employeeId}</span>
-                    <span>{job.status}</span>
-                    <span className="row-actions">
-                      {job.status === ANONYMIZATION_STATUS_REQUESTED && (
-                        <button onClick={() => executeAnonymization(job.id)}>Execute</button>
-                      )}
-                      {job.status === ANONYMIZATION_STATUS_COMPLETED && (job.downloadToken || job.filePath) && (
-                        <button type="button" className="ghost" onClick={() => downloadAnonymization(job.id, job.downloadToken)}>
-                          Download report
-                        </button>
-                      )}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="card">
-              <h3>Access logs</h3>
-              <div className="table">
-                <div className="table-row header">
-                  <span>Actor</span>
-                  <span>Employee</span>
-                  <span>Fields</span>
-                  <span>When</span>
-                </div>
-                {accessLogs.map((log) => (
-                  <div key={log.id} className="table-row">
-                    <span>{log.actorUserId}</span>
-                    <span>{log.employeeId}</span>
-                    <span>{Array.isArray(log.fields) ? log.fields.join(', ') : ''}</span>
-                    <span>{log.createdAt?.slice(0, 10)}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="row-actions pagination">
-                <button type="button" className="ghost" onClick={prevAccessPage} disabled={accessOffset === 0}>
-                  Prev
-                </button>
-                <small>
-                  {accessTotal ? `${Math.min(accessOffset + ACCESS_LIMIT, accessTotal)} of ${accessTotal}` : '—'}
-                </small>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={nextAccessPage}
-                  disabled={accessTotal ? accessOffset + ACCESS_LIMIT >= accessTotal : accessLogs.length < ACCESS_LIMIT}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </>
+            }
+          />
         )}
-      </div>
+        {isHR && (
+          <Route
+            path="consent"
+            element={
+              <div className="card-grid">
+                <div className="card">
+                  <h3>Consent records</h3>
+                  <form className="stack" onSubmit={saveConsent}>
+                    <input
+                      placeholder="Employee ID"
+                      value={consentForm.employeeId}
+                      onChange={(e) => setConsentForm({ ...consentForm, employeeId: e.target.value })}
+                      required
+                    />
+                    <input
+                      placeholder="Consent type"
+                      value={consentForm.consentType}
+                      onChange={(e) => setConsentForm({ ...consentForm, consentType: e.target.value })}
+                      required
+                    />
+                    <button type="submit">Record consent</button>
+                  </form>
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Employee</span>
+                      <span>Type</span>
+                      <span>Status</span>
+                      <span>Actions</span>
+                    </div>
+                    {consents.map((consent) => (
+                      <div key={consent.id} className="table-row">
+                        <span>{consent.employeeId}</span>
+                        <span>{consent.consentType}</span>
+                        <span>{consent.revokedAt ? 'Revoked' : 'Granted'}</span>
+                        <span className="row-actions">
+                          {!consent.revokedAt && (
+                            <button type="button" className="ghost" onClick={() => revokeConsent(consent.id)}>
+                              Revoke
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            }
+          />
+        )}
+        {isHR && (
+          <Route
+            path="anonymization"
+            element={
+              <div className="card-grid">
+                <div className="card">
+                  <h3>Anonymization</h3>
+                  <form className="stack" onSubmit={requestAnonymization}>
+                    <input
+                      placeholder="Employee ID"
+                      value={anonymizeForm.employeeId}
+                      onChange={(e) => setAnonymizeForm({ ...anonymizeForm, employeeId: e.target.value })}
+                      required
+                    />
+                    <input
+                      placeholder="Reason"
+                      value={anonymizeForm.reason}
+                      onChange={(e) => setAnonymizeForm({ ...anonymizeForm, reason: e.target.value })}
+                    />
+                    <button type="submit">Request anonymization</button>
+                  </form>
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Employee</span>
+                      <span>Status</span>
+                      <span>Actions</span>
+                    </div>
+                    {anonymizationJobs.map((job) => (
+                      <div key={job.id} className="table-row">
+                        <span>{job.employeeId}</span>
+                        <span>{job.status}</span>
+                        <span className="row-actions">
+                          {job.status === ANONYMIZATION_STATUS_REQUESTED && (
+                            <button onClick={() => executeAnonymization(job.id)}>Execute</button>
+                          )}
+                          {job.status === ANONYMIZATION_STATUS_COMPLETED && (job.downloadToken || job.filePath) && (
+                            <button type="button" className="ghost" onClick={() => downloadAnonymization(job.id, job.downloadToken)}>
+                              Download report
+                            </button>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            }
+          />
+        )}
+        {isHR && (
+          <Route
+            path="access-logs"
+            element={
+              <div className="card-grid">
+                <div className="card">
+                  <h3>Access logs</h3>
+                  <div className="table">
+                    <div className="table-row header">
+                      <span>Actor</span>
+                      <span>Employee</span>
+                      <span>Fields</span>
+                      <span>When</span>
+                    </div>
+                    {accessLogs.map((log) => (
+                      <div key={log.id} className="table-row">
+                        <span>{log.actorUserId}</span>
+                        <span>{log.employeeId}</span>
+                        <span>{Array.isArray(log.fields) ? log.fields.join(', ') : ''}</span>
+                        <span>{log.createdAt?.slice(0, 10)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="row-actions pagination">
+                    <button type="button" className="ghost" onClick={prevAccessPage} disabled={accessOffset === 0}>
+                      Prev
+                    </button>
+                    <small>
+                      {accessTotal ? `${Math.min(accessOffset + ACCESS_LIMIT, accessTotal)} of ${accessTotal}` : '—'}
+                    </small>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={nextAccessPage}
+                      disabled={accessTotal ? accessOffset + ACCESS_LIMIT >= accessTotal : accessLogs.length < ACCESS_LIMIT}
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              </div>
+            }
+          />
+        )}
+        <Route path="*" element={<Navigate to="overview" replace />} />
+      </Routes>
     </section>
   );
 }

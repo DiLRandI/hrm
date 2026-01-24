@@ -160,6 +160,31 @@ button.ghost {
   color: var(--ink-muted);
 }
 
+.subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  background: var(--surface-soft);
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(30, 42, 42, 0.08);
+}
+
+.subnav a {
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: var(--ink-muted);
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.subnav a.active,
+.subnav a:hover {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 8px 16px rgba(33, 24, 12, 0.08);
+}
+
 .card-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -255,6 +280,28 @@ button.ghost {
 .row-actions {
   display: flex;
   gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.ghost-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(30, 42, 42, 0.15);
+  color: var(--ink-muted);
+  min-height: 44px;
+  transition: all 0.2s ease;
+  font-weight: 600;
+  font-size: 14px;
+  max-width: 100%;
+}
+
+.ghost-link:hover {
+  color: var(--ink);
+  background: rgba(224, 122, 95, 0.08);
 }
 
 .pagination {
