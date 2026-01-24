@@ -401,7 +401,7 @@ func (s *Store) DepartmentCount(ctx context.Context, tenantID string) (int, erro
 
 func (s *Store) ListDepartments(ctx context.Context, tenantID string, limit, offset int) ([]Department, error) {
 	rows, err := s.DB.Query(ctx, `
-    SELECT id, name, parent_id, manager_id, created_at
+    SELECT id, name, COALESCE(department_code, ''), parent_id, manager_id, created_at
     FROM departments
     WHERE tenant_id = $1
     ORDER BY name
@@ -415,7 +415,7 @@ func (s *Store) ListDepartments(ctx context.Context, tenantID string, limit, off
 	var departments []Department
 	for rows.Next() {
 		var dep Department
-		if err := rows.Scan(&dep.ID, &dep.Name, &dep.ParentID, &dep.ManagerID, &dep.CreatedAt); err != nil {
+		if err := rows.Scan(&dep.ID, &dep.Name, &dep.Code, &dep.ParentID, &dep.ManagerID, &dep.CreatedAt); err != nil {
 			return nil, err
 		}
 		departments = append(departments, dep)
@@ -426,10 +426,10 @@ func (s *Store) ListDepartments(ctx context.Context, tenantID string, limit, off
 func (s *Store) CreateDepartment(ctx context.Context, tenantID string, dep Department) (string, error) {
 	var id string
 	err := s.DB.QueryRow(ctx, `
-    INSERT INTO departments (tenant_id, name, parent_id, manager_id)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO departments (tenant_id, name, department_code, parent_id, manager_id)
+    VALUES ($1, $2, $3, $4, $5)
     RETURNING id
-  `, tenantID, dep.Name, nullIfEmpty(dep.ParentID), nullIfEmpty(dep.ManagerID)).Scan(&id)
+  `, tenantID, dep.Name, nullIfEmpty(dep.Code), nullIfEmpty(dep.ParentID), nullIfEmpty(dep.ManagerID)).Scan(&id)
 	if err != nil {
 		return "", err
 	}
@@ -439,9 +439,9 @@ func (s *Store) CreateDepartment(ctx context.Context, tenantID string, dep Depar
 func (s *Store) UpdateDepartment(ctx context.Context, tenantID, departmentID string, dep Department) (bool, error) {
 	cmd, err := s.DB.Exec(ctx, `
     UPDATE departments
-    SET name = $1, parent_id = $2, manager_id = $3
-    WHERE tenant_id = $4 AND id = $5
-  `, dep.Name, nullIfEmpty(dep.ParentID), nullIfEmpty(dep.ManagerID), tenantID, departmentID)
+    SET name = $1, department_code = $2, parent_id = $3, manager_id = $4
+    WHERE tenant_id = $5 AND id = $6
+  `, dep.Name, nullIfEmpty(dep.Code), nullIfEmpty(dep.ParentID), nullIfEmpty(dep.ManagerID), tenantID, departmentID)
 	if err != nil {
 		return false, err
 	}

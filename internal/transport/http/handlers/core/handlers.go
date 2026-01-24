@@ -466,6 +466,10 @@ func (h *Handler) handleCreateDepartment(w http.ResponseWriter, r *http.Request)
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if payload.Name == "" || payload.Code == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "name and code are required", middleware.GetRequestID(r.Context()))
+		return
+	}
 
 	var id string
 	id, err := h.Service.CreateDepartment(r.Context(), user.TenantID, payload)
@@ -494,8 +498,8 @@ func (h *Handler) handleUpdateDepartment(w http.ResponseWriter, r *http.Request)
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if payload.Name == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "name is required", middleware.GetRequestID(r.Context()))
+	if payload.Name == "" || payload.Code == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "name and code are required", middleware.GetRequestID(r.Context()))
 		return
 	}
 

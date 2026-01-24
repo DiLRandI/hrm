@@ -46,6 +46,7 @@ type EmergencyContact struct {
 type Department struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
+	Code      string    `json:"code"`
 	ParentID  string    `json:"parentId"`
 	ManagerID string    `json:"managerId"`
 	CreatedAt time.Time `json:"createdAt"`

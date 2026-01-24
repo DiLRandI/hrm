@@ -10,6 +10,7 @@ import { EmptyState, InlineError, PageStatus } from '../../../shared/components/
 import EmployeeCreateForm from '../components/EmployeeCreateForm.jsx';
 import EmployeeEditForm from '../components/EmployeeEditForm.jsx';
 import EmployeeTable from '../components/EmployeeTable.jsx';
+import DepartmentsCard from '../components/DepartmentsCard.jsx';
 import ManagerHistory from '../components/ManagerHistory.jsx';
 import OrgChart from '../components/OrgChart.jsx';
 import RolePermissions from '../components/RolePermissions.jsx';
@@ -32,6 +33,13 @@ export default function Employees() {
   const [actionError, setActionError] = useState('');
   const [form, setForm] = useState({ firstName: '', lastName: '', email: '' });
   const [tempCredentials, setTempCredentials] = useState(null);
+  const [departmentForm, setDepartmentForm] = useState({
+    name: '',
+    code: '',
+    parentId: '',
+    managerId: '',
+  });
+  const [editingDepartmentId, setEditingDepartmentId] = useState('');
 
   const fetchEmployees = useCallback(
     ({ signal }) => api.getWithMeta(`/employees?limit=${EMPLOYEE_LIMIT}&offset=${employeeOffset}`, { signal }),
@@ -53,7 +61,7 @@ export default function Employees() {
 
   const lookupNeeds = useMemo(() => {
     return {
-      departments: isHR && activeSection === 'manage',
+      departments: activeSection === 'directory' || (isHR && activeSection === 'manage'),
       orgChart: activeSection === 'org',
       payGroups: isHR && (activeSection === 'manage' || activeSection === 'directory'),
       roles: isHR && activeSection === 'access',
@@ -151,6 +159,13 @@ export default function Employees() {
     }, {});
   }, [lookups.payGroups]);
 
+  const departmentById = useMemo(() => {
+    return (lookups.departments || []).reduce((acc, dep) => {
+      acc[dep.id] = dep.name;
+      return acc;
+    }, {});
+  }, [lookups.departments]);
+
   const reloadAll = async () => {
     await Promise.all([reloadEmployees(), reloadLookups()]);
   };
@@ -168,6 +183,57 @@ export default function Employees() {
 
   const handleFormChange = (field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleDepartmentChange = (field, value) => {
+    setDepartmentForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const resetDepartmentForm = () => {
+    setDepartmentForm({ name: '', code: '', parentId: '', managerId: '' });
+    setEditingDepartmentId('');
+  };
+
+  const handleDepartmentSubmit = async (e) => {
+    e.preventDefault();
+    setActionError('');
+    try {
+      if (editingDepartmentId) {
+        await api.put(`/departments/${editingDepartmentId}`, departmentForm);
+      } else {
+        await api.post('/departments', departmentForm);
+      }
+      resetDepartmentForm();
+      await reloadLookups();
+    } catch (err) {
+      setActionError(err.message);
+    }
+  };
+
+  const handleEditDepartment = (dep) => {
+    setEditingDepartmentId(dep.id);
+    setDepartmentForm({
+      name: dep.name || '',
+      code: dep.code || '',
+      parentId: dep.parentId || '',
+      managerId: dep.managerId || '',
+    });
+  };
+
+  const handleDeleteDepartment = async (dep) => {
+    if (!window.confirm(`Delete ${dep.name}? Employees assigned to this department will block deletion.`)) {
+      return;
+    }
+    setActionError('');
+    try {
+      await api.del(`/departments/${dep.id}`);
+      if (editingDepartmentId === dep.id) {
+        resetDepartmentForm();
+      }
+      await reloadLookups();
+    } catch (err) {
+      setActionError(err.message);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -318,7 +384,13 @@ export default function Employees() {
                   description="Once employees are added, they will appear here with contact and status details."
                 />
               ) : (
-                <EmployeeTable employees={employees} showPayGroup={isHR} payGroupById={payGroupById} />
+                <EmployeeTable
+                  employees={employees}
+                  showDepartment
+                  departmentById={departmentById}
+                  showPayGroup={isHR}
+                  payGroupById={payGroupById}
+                />
               )}
 
               <div className="row-actions pagination">
@@ -388,6 +460,19 @@ export default function Employees() {
                   onSelectEmployee={handleSelectEmployee}
                   onFieldChange={(field, value) => setEditEmployee((prev) => ({ ...prev, [field]: value }))}
                   onSubmit={handleUpdateEmployee}
+                  disabled={loading}
+                />
+
+                <DepartmentsCard
+                  departments={lookups.departments}
+                  employees={employeeOptions}
+                  form={departmentForm}
+                  editingId={editingDepartmentId}
+                  onChange={handleDepartmentChange}
+                  onSubmit={handleDepartmentSubmit}
+                  onEdit={handleEditDepartment}
+                  onCancelEdit={resetDepartmentForm}
+                  onDelete={handleDeleteDepartment}
                   disabled={loading}
                 />
 
