@@ -3,7 +3,7 @@ BIN_DIR=bin
 FRONTEND_DIR=frontend
 DATABASE_URL?=postgres://hrm:hrm@localhost:5432/hrm?sslmode=disable
 JWT_SECRET?=dev-secret
-DATA_ENCRYPTION_KEY?=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+DATA_ENCRYPTION_KEY?=1QFualBeEVX7XW3hmeBPGaQQD255ctbtvnKXJHakYjo=
 APP_ADDR?=:8080
 SEED_TENANT_NAME?=Default Tenant
 SEED_ADMIN_EMAIL?=admin@example.com

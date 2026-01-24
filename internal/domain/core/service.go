@@ -110,6 +110,10 @@ func (s *Service) CreateEmployee(ctx context.Context, tenantID string, emp Emplo
 	return s.store.CreateEmployee(ctx, tenantID, emp)
 }
 
+func (s *Service) CreateEmployeeWithUser(ctx context.Context, tenantID string, emp Employee, password string) (string, string, error) {
+	return s.store.CreateEmployeeWithUser(ctx, tenantID, emp, password)
+}
+
 func (s *Service) UpdateEmployee(ctx context.Context, tenantID, employeeID string, emp Employee) error {
 	return s.store.UpdateEmployee(ctx, tenantID, employeeID, emp)
 }

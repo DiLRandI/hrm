@@ -25,6 +25,7 @@ export default function Employees() {
   const [managerHistory, setManagerHistory] = useState([]);
   const [actionError, setActionError] = useState('');
   const [form, setForm] = useState({ firstName: '', lastName: '', email: '' });
+  const [tempCredentials, setTempCredentials] = useState(null);
 
   const fetchEmployees = useCallback(
     ({ signal }) => api.getWithMeta(`/employees?limit=${EMPLOYEE_LIMIT}&offset=${employeeOffset}`, { signal }),
@@ -132,12 +133,17 @@ export default function Employees() {
     e.preventDefault();
     setActionError('');
     try {
-      await api.post('/employees', {
+      const result = await api.post('/employees', {
         firstName: form.firstName,
         lastName: form.lastName,
         email: form.email,
         status: EMPLOYEE_STATUS_ACTIVE,
       });
+      if (result?.tempPassword) {
+        setTempCredentials({ email: form.email, password: result.tempPassword });
+      } else {
+        setTempCredentials(null);
+      }
       setForm({ firstName: '', lastName: '', email: '' });
       await reloadAll();
     } catch (err) {
@@ -222,6 +228,34 @@ export default function Employees() {
 
       {loading && employees.length === 0 && (
         <PageStatus title="Loading employees" description="Preparing people records and org data." />
+      )}
+
+      {tempCredentials && (
+        <div className="card">
+          <h3>Temporary login created</h3>
+          <p>
+            Share this once with the employee. It will not be shown again.
+          </p>
+          <div className="inline-form" style={{ marginTop: '12px' }}>
+            <input readOnly value={tempCredentials.email} aria-label="Employee email" />
+            <input readOnly value={tempCredentials.password} aria-label="Temporary password" />
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(tempCredentials.password);
+                } catch {
+                  // Ignore clipboard failures (permissions, insecure context).
+                }
+              }}
+            >
+              Copy password
+            </button>
+            <button type="button" className="ghost" onClick={() => setTempCredentials(null)}>
+              Dismiss
+            </button>
+          </div>
+        </div>
       )}
 
       {isHR && (

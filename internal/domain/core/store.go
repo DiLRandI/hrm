@@ -5,6 +5,9 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/jackc/pgx/v5"
+
+	"hrm/internal/domain/auth"
 	cryptoutil "hrm/internal/platform/crypto"
 	"hrm/internal/platform/querier"
 )
@@ -12,6 +15,10 @@ import (
 type Store struct {
 	DB     querier.Querier
 	Crypto *cryptoutil.Service
+}
+
+type rowQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
 func NewStore(db querier.Querier, crypto *cryptoutil.Service) *Store {
@@ -200,6 +207,48 @@ func (s *Store) ListEmployees(ctx context.Context, tenantID string) ([]Employee,
 }
 
 func (s *Store) CreateEmployee(ctx context.Context, tenantID string, emp Employee) (string, error) {
+	return s.createEmployee(ctx, s.DB, tenantID, emp, emp.UserID)
+}
+
+func (s *Store) CreateEmployeeWithUser(ctx context.Context, tenantID string, emp Employee, password string) (string, string, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var roleID string
+	if err := tx.QueryRow(ctx, "SELECT id FROM roles WHERE tenant_id = $1 AND name = $2", tenantID, auth.RoleEmployee).Scan(&roleID); err != nil {
+		return "", "", err
+	}
+
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return "", "", err
+	}
+
+	var userID string
+	if err := tx.QueryRow(ctx, `
+    INSERT INTO users (tenant_id, email, password_hash, role_id)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id
+  `, tenantID, emp.Email, hash, roleID).Scan(&userID); err != nil {
+		return "", "", err
+	}
+
+	employeeID, err := s.createEmployee(ctx, tx, tenantID, emp, userID)
+	if err != nil {
+		return "", "", err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return "", "", err
+	}
+
+	return employeeID, userID, nil
+}
+
+func (s *Store) createEmployee(ctx context.Context, q rowQuerier, tenantID string, emp Employee, userID string) (string, error) {
 	nationalEnc, bankEnc, salaryEnc, encErr := encryptEmployeeSensitive(s.Crypto, emp)
 	if encErr != nil {
 		return "", encErr
@@ -211,15 +260,18 @@ func (s *Store) CreateEmployee(ctx context.Context, tenantID string, emp Employe
 		bankPlain = nil
 		salaryPlain = nil
 	}
+	if userID == "" {
+		userID = emp.UserID
+	}
 	var id string
-	err := s.DB.QueryRow(ctx, `
+	err := q.QueryRow(ctx, `
     INSERT INTO employees (tenant_id, user_id, employee_number, first_name, last_name, email, phone, date_of_birth,
       address, national_id, national_id_enc, bank_account, bank_account_enc, salary, salary_enc, currency,
       employment_type, department_id, manager_id, pay_group_id, start_date, end_date, status)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
     RETURNING id
   `,
-		tenantID, nullIfEmpty(emp.UserID), nullIfEmpty(emp.EmployeeNumber), emp.FirstName, emp.LastName, emp.Email, emp.Phone,
+		tenantID, nullIfEmpty(userID), nullIfEmpty(emp.EmployeeNumber), emp.FirstName, emp.LastName, emp.Email, emp.Phone,
 		emp.DateOfBirth, emp.Address, nationalPlain, nationalEnc, bankPlain, bankEnc, salaryPlain, salaryEnc,
 		emp.Currency, emp.EmploymentType, nullIfEmpty(emp.DepartmentID), nullIfEmpty(emp.ManagerID), nullIfEmpty(emp.PayGroupID),
 		emp.StartDate, emp.EndDate, emp.Status,

@@ -1,11 +1,14 @@
 package corehandler
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -183,11 +186,21 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if strings.TrimSpace(payload.Email) == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee email required", middleware.GetRequestID(r.Context()))
+		return
+	}
 	if payload.Status == "" {
 		payload.Status = core.EmployeeStatusActive
 	}
 
-	id, err := h.Service.CreateEmployee(r.Context(), user.TenantID, payload)
+	tempPassword, err := generateTempPassword()
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "password_generate_failed", "failed to generate temporary password", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	id, _, err := h.Service.CreateEmployeeWithUser(r.Context(), user.TenantID, payload, tempPassword)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -208,7 +221,23 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("audit core.employee.create failed", "err", err)
 	}
 
-	api.Created(w, map[string]string{"id": id}, middleware.GetRequestID(r.Context()))
+	api.Created(w, map[string]string{"id": id, "tempPassword": tempPassword}, middleware.GetRequestID(r.Context()))
+}
+
+const tempPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+const tempPasswordLength = 12
+
+func generateTempPassword() (string, error) {
+	out := make([]byte, tempPasswordLength)
+	max := big.NewInt(int64(len(tempPasswordAlphabet)))
+	for i := 0; i < tempPasswordLength; i++ {
+		n, err := rand.Int(rand.Reader, max)
+		if err != nil {
+			return "", err
+		}
+		out[i] = tempPasswordAlphabet[n.Int64()]
+	}
+	return string(out), nil
 }
 
 func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
