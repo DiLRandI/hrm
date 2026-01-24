@@ -5,17 +5,16 @@ import (
 	"errors"
 	"strconv"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	cryptoutil "hrm/internal/platform/crypto"
+	"hrm/internal/platform/querier"
 )
 
 type Store struct {
-	DB     *pgxpool.Pool
+	DB     querier.Querier
 	Crypto *cryptoutil.Service
 }
 
-func NewStore(db *pgxpool.Pool, crypto *cryptoutil.Service) *Store {
+func NewStore(db querier.Querier, crypto *cryptoutil.Service) *Store {
 	return &Store{DB: db, Crypto: crypto}
 }
 

@@ -23,7 +23,7 @@ type policyRow struct {
 	CarryOver     float64
 }
 
-func ApplyAccruals(ctx context.Context, store *Store, tenantID string, now time.Time) (AccrualSummary, error) {
+func ApplyAccruals(ctx context.Context, store AccrualStore, tenantID string, now time.Time) (AccrualSummary, error) {
 	var summary AccrualSummary
 
 	policies, err := store.ListAccrualPolicies(ctx, tenantID)

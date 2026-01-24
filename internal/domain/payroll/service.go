@@ -12,11 +12,11 @@ import (
 )
 
 type Service struct {
-	store  *Store
+	store  StoreAPI
 	crypto *cryptoutil.Service
 }
 
-func NewService(store *Store, crypto *cryptoutil.Service) *Service {
+func NewService(store StoreAPI, crypto *cryptoutil.Service) *Service {
 	return &Service{store: store, crypto: crypto}
 }
 

@@ -10,12 +10,12 @@ type Mailer interface {
 }
 
 type Service struct {
-	store       *Store
+	store       StoreAPI
 	Mailer      Mailer
 	DefaultFrom string
 }
 
-func New(store *Store, mailer Mailer) *Service {
+func New(store StoreAPI, mailer Mailer) *Service {
 	return &Service{store: store, Mailer: mailer, DefaultFrom: "no-reply@example.com"}
 }
 

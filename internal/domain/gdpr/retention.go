@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"hrm/internal/platform/querier"
 )
 
-func ApplyRetention(ctx context.Context, db *pgxpool.Pool, tenantID, category string, cutoff time.Time) (int64, error) {
+func ApplyRetention(ctx context.Context, db querier.Querier, tenantID, category string, cutoff time.Time) (int64, error) {
 	switch category {
 	case DataCategoryAudit:
 		tag, err := db.Exec(ctx, `

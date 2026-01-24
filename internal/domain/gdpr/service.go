@@ -13,12 +13,12 @@ type EmployeeStore interface {
 }
 
 type Service struct {
-	store     *Store
+	store     StoreAPI
 	employees EmployeeStore
 	crypto    *cryptoutil.Service
 }
 
-func NewService(store *Store, employees EmployeeStore, crypto *cryptoutil.Service) *Service {
+func NewService(store StoreAPI, employees EmployeeStore, crypto *cryptoutil.Service) *Service {
 	return &Service{store: store, employees: employees, crypto: crypto}
 }
 

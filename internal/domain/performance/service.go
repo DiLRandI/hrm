@@ -1,9 +1,9 @@
 package performance
 
 type Service struct {
-	store *Store
+	store StoreAPI
 }
 
-func NewService(store *Store) *Service {
+func NewService(store StoreAPI) *Service {
 	return &Service{store: store}
 }

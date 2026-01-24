@@ -10,8 +10,14 @@ import (
 )
 
 type Service struct {
-	Store *Store
-	Core  *core.Store
+	Store     StoreAPI
+	Employees EmployeeLookup
+}
+
+type EmployeeLookup interface {
+	EmployeeIDByUserID(ctx context.Context, tenantID, userID string) (string, error)
+	ManagerIDByEmployeeID(ctx context.Context, tenantID, employeeID string) (string, error)
+	IsManagerOf(ctx context.Context, tenantID, managerEmployeeID, employeeID string) (bool, error)
 }
 
 var (
@@ -20,8 +26,8 @@ var (
 	ErrInvalidState       = errors.New("invalid state")
 )
 
-func NewService(store *Store, coreStore *core.Store) *Service {
-	return &Service{Store: store, Core: coreStore}
+func NewService(store StoreAPI, coreStore *core.Store) *Service {
+	return &Service{Store: store, Employees: coreStore}
 }
 
 func (s *Service) ListTypes(ctx context.Context, tenantID string) ([]LeaveType, error) {
@@ -53,17 +59,17 @@ func (s *Service) DeleteHoliday(ctx context.Context, tenantID, holidayID string)
 }
 
 func (s *Service) EmployeeIDByUserID(ctx context.Context, tenantID, userID string) (string, error) {
-	if s.Core == nil {
+	if s.Employees == nil {
 		return "", nil
 	}
-	return s.Core.EmployeeIDByUserID(ctx, tenantID, userID)
+	return s.Employees.EmployeeIDByUserID(ctx, tenantID, userID)
 }
 
 func (s *Service) IsManagerOf(ctx context.Context, tenantID, managerEmployeeID, employeeID string) (bool, error) {
-	if s.Core == nil {
+	if s.Employees == nil {
 		return false, nil
 	}
-	return s.Core.IsManagerOf(ctx, tenantID, managerEmployeeID, employeeID)
+	return s.Employees.IsManagerOf(ctx, tenantID, managerEmployeeID, employeeID)
 }
 
 func (s *Service) ListBalances(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error) {
@@ -75,7 +81,11 @@ func (s *Service) AdjustBalance(ctx context.Context, tenantID, employeeID, leave
 }
 
 func (s *Service) RunAccruals(ctx context.Context, tenantID string, now time.Time) (AccrualSummary, error) {
-	return ApplyAccruals(ctx, s.Store, tenantID, now)
+	accrualStore, ok := s.Store.(AccrualStore)
+	if !ok {
+		return AccrualSummary{}, errors.New("accrual store not configured")
+	}
+	return ApplyAccruals(ctx, accrualStore, tenantID, now)
 }
 
 type RequestListResult struct {
@@ -170,10 +180,10 @@ func (s *Service) ApproveRequest(ctx context.Context, tenantID, requestID, appro
 	}
 
 	if roleName == auth.RoleManager {
-		if s.Core != nil {
-			managerEmployeeID, err := s.Core.ManagerIDByEmployeeID(ctx, tenantID, employeeID)
+		if s.Employees != nil {
+			managerEmployeeID, err := s.Employees.ManagerIDByEmployeeID(ctx, tenantID, employeeID)
 			if err == nil && managerEmployeeID != "" {
-				selfEmployeeID, err := s.Core.EmployeeIDByUserID(ctx, tenantID, approverUserID)
+				selfEmployeeID, err := s.Employees.EmployeeIDByUserID(ctx, tenantID, approverUserID)
 				if err == nil && selfEmployeeID != managerEmployeeID {
 					return result, ErrForbidden
 				}
@@ -233,10 +243,10 @@ func (s *Service) RejectRequest(ctx context.Context, tenantID, requestID, approv
 	result := RejectResult{EmployeeID: employeeID, LeaveTypeID: leaveTypeID}
 
 	if roleName == auth.RoleManager {
-		if s.Core != nil {
-			managerEmployeeID, err := s.Core.ManagerIDByEmployeeID(ctx, tenantID, employeeID)
+		if s.Employees != nil {
+			managerEmployeeID, err := s.Employees.ManagerIDByEmployeeID(ctx, tenantID, employeeID)
 			if err == nil && managerEmployeeID != "" {
-				selfEmployeeID, err := s.Core.EmployeeIDByUserID(ctx, tenantID, approverUserID)
+				selfEmployeeID, err := s.Employees.EmployeeIDByUserID(ctx, tenantID, approverUserID)
 				if err == nil && selfEmployeeID != managerEmployeeID {
 					return RejectResult{}, ErrForbidden
 				}

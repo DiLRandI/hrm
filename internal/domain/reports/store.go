@@ -3,16 +3,15 @@ package reports
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"hrm/internal/domain/leave"
+	"hrm/internal/platform/querier"
 )
 
 type Store struct {
-	DB *pgxpool.Pool
+	DB querier.Querier
 }
 
-func NewStore(db *pgxpool.Pool) *Store {
+func NewStore(db querier.Querier) *Store {
 	return &Store{DB: db}
 }
 
