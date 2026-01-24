@@ -19,4 +19,6 @@ const (
 	DataCategoryGDPR          = "gdpr"
 	DataCategoryAccessLogs    = "access_logs"
 	DataCategoryNotifications = "notifications"
+	DataCategoryProfile       = "employee_profile"
+	DataCategoryEmergency     = "emergency_contacts"
 )

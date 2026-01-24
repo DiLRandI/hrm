@@ -32,6 +32,10 @@ func NewHandler(service *core.Service, auditSvc *audit.Service) *Handler {
 
 func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/me", h.handleMe)
+	r.Route("/profile", func(r chi.Router) {
+		r.Get("/emergency-contacts", h.handleListSelfEmergencyContacts)
+		r.Put("/emergency-contacts", h.handleReplaceSelfEmergencyContacts)
+	})
 	r.Get("/org/chart", h.handleOrgChart)
 	r.Route("/employees", func(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/", h.handleListEmployees)
@@ -39,6 +43,8 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.Route("/{employeeID}", func(r chi.Router) {
 			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/", h.handleGetEmployee)
 			r.Put("/", h.handleUpdateEmployee)
+			r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Service)).Get("/emergency-contacts", h.handleListEmployeeEmergencyContacts)
+			r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Service)).Put("/emergency-contacts", h.handleReplaceEmployeeEmergencyContacts)
 			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/manager-history", h.handleManagerHistory)
 		})
 	})
@@ -308,6 +314,115 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.Success(w, map[string]string{"id": employeeID}, middleware.GetRequestID(r.Context()))
+}
+
+type emergencyContactsPayload struct {
+	Contacts []core.EmergencyContact `json:"contacts"`
+}
+
+func (h *Handler) handleListSelfEmergencyContacts(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	emp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil || emp == nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if err := h.Service.InsertAccessLog(r.Context(), user.TenantID, user.UserID, emp.ID, middleware.GetRequestID(r.Context()), []string{"emergency_contacts"}); err != nil {
+		slog.Warn("access log insert failed", "err", err)
+	}
+
+	contacts, err := h.Service.ListEmergencyContacts(r.Context(), user.TenantID, emp.ID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "emergency_contact_list_failed", "failed to list emergency contacts", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, contacts, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleReplaceSelfEmergencyContacts(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	emp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil || emp == nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	var payload emergencyContactsPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if err := h.Service.ReplaceEmergencyContacts(r.Context(), user.TenantID, emp.ID, payload.Contacts); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "emergency_contact_update_failed", "failed to update emergency contacts", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "core.emergency_contacts.update", "employee", emp.ID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"count": len(payload.Contacts)}); err != nil {
+		slog.Warn("audit emergency contacts update failed", "err", err)
+	}
+
+	api.Success(w, map[string]string{"employeeId": emp.ID}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleListEmployeeEmergencyContacts(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	employeeID := chi.URLParam(r, "employeeID")
+	contacts, err := h.Service.ListEmergencyContacts(r.Context(), user.TenantID, employeeID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "emergency_contact_list_failed", "failed to list emergency contacts", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, contacts, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleReplaceEmployeeEmergencyContacts(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if user.RoleName != auth.RoleHR {
+		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	employeeID := chi.URLParam(r, "employeeID")
+	var payload emergencyContactsPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if err := h.Service.ReplaceEmergencyContacts(r.Context(), user.TenantID, employeeID, payload.Contacts); err != nil {
+		api.Fail(w, http.StatusInternalServerError, "emergency_contact_update_failed", "failed to update emergency contacts", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "core.emergency_contacts.update", "employee", employeeID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"count": len(payload.Contacts)}); err != nil {
+		slog.Warn("audit emergency contacts update failed", "err", err)
+	}
+
+	api.Success(w, map[string]string{"employeeId": employeeID}, middleware.GetRequestID(r.Context()))
 }
 
 func (h *Handler) handleListDepartments(w http.ResponseWriter, r *http.Request) {

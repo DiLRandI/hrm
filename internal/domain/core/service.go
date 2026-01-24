@@ -118,6 +118,14 @@ func (s *Service) UpdateEmployee(ctx context.Context, tenantID, employeeID strin
 	return s.store.UpdateEmployee(ctx, tenantID, employeeID, emp)
 }
 
+func (s *Service) ListEmergencyContacts(ctx context.Context, tenantID, employeeID string) ([]EmergencyContact, error) {
+	return s.store.ListEmergencyContacts(ctx, tenantID, employeeID)
+}
+
+func (s *Service) ReplaceEmergencyContacts(ctx context.Context, tenantID, employeeID string, contacts []EmergencyContact) error {
+	return s.store.ReplaceEmergencyContacts(ctx, tenantID, employeeID, contacts)
+}
+
 func (s *Service) IsManagerOf(ctx context.Context, tenantID, managerEmployeeID, employeeID string) (bool, error) {
 	return s.store.IsManagerOf(ctx, tenantID, managerEmployeeID, employeeID)
 }

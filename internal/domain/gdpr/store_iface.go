@@ -45,6 +45,7 @@ type StoreAPI interface {
 	DSARNotifications(ctx context.Context, tenantID, userID string) ([]map[string]any, error)
 	DSARAccessLogs(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error)
 	DSARManagerHistory(ctx context.Context, employeeID string) ([]map[string]any, error)
+	DSAREmergencyContacts(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error)
 	BeginTx(ctx context.Context) (pgx.Tx, error)
 	UpdateAnonymizationStatusTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, status string) error
 	EmployeeUserIDTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID string) (string, error)
@@ -56,5 +57,6 @@ type StoreAPI interface {
 	AnonymizeCheckinsTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID string) error
 	AnonymizePIPsTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID string) error
 	ClearPayslipURLsTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID string) error
+	DeleteEmergencyContactsTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID string) error
 	CompleteAnonymizationJobTx(ctx context.Context, tx pgx.Tx, tenantID, jobID, status string) error
 }

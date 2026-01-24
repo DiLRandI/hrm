@@ -173,6 +173,22 @@ func ApplyRetention(ctx context.Context, db querier.Querier, tenantID, category 
       WHERE tenant_id = $1 AND created_at < $2
     `, tenantID, cutoff)
 		return tag.RowsAffected(), err
+	case DataCategoryEmergency:
+		tag, err := db.Exec(ctx, `
+      DELETE FROM employee_emergency_contacts
+      WHERE tenant_id = $1 AND updated_at < $2
+    `, tenantID, cutoff)
+		return tag.RowsAffected(), err
+	case DataCategoryProfile:
+		tag, err := db.Exec(ctx, `
+      UPDATE employees
+      SET preferred_name = NULL,
+          personal_email = NULL,
+          pronouns = NULL,
+          updated_at = now()
+      WHERE tenant_id = $1 AND end_date IS NOT NULL AND end_date < $2
+    `, tenantID, cutoff)
+		return tag.RowsAffected(), err
 	default:
 		return 0, nil
 	}

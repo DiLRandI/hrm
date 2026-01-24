@@ -76,6 +76,9 @@ func (s *Service) GenerateDSAR(ctx context.Context, tenantID, employeeID, export
 	if rows, err := s.store.DSARManagerHistory(ctx, employeeID); err == nil {
 		datasets["managerHistory"] = rows
 	}
+	if rows, err := s.store.DSAREmergencyContacts(ctx, tenantID, employeeID); err == nil {
+		datasets["emergencyContacts"] = rows
+	}
 
 	payload := BuildDSARPayload(employee, datasets)
 	jsonBytes, err := json.MarshalIndent(payload, "", "  ")

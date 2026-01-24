@@ -61,6 +61,10 @@ func (s *Store) DSARManagerHistory(ctx context.Context, employeeID string) ([]ma
 	return s.queryRowsAsJSON(ctx, `SELECT row_to_json(mr) FROM manager_relations mr WHERE mr.employee_id = $1`, employeeID)
 }
 
+func (s *Store) DSAREmergencyContacts(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error) {
+	return s.queryRowsAsJSON(ctx, `SELECT row_to_json(ec) FROM employee_emergency_contacts ec WHERE tenant_id = $1 AND employee_id = $2`, tenantID, employeeID)
+}
+
 func (s *Store) queryRowsAsJSON(ctx context.Context, query string, args ...any) ([]map[string]any, error) {
 	rows, err := s.DB.Query(ctx, query, args...)
 	if err != nil {

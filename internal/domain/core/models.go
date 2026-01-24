@@ -9,6 +9,9 @@ type Employee struct {
 	FirstName      string     `json:"firstName"`
 	LastName       string     `json:"lastName"`
 	Email          string     `json:"email"`
+	PersonalEmail  string     `json:"personalEmail"`
+	PreferredName  string     `json:"preferredName"`
+	Pronouns       string     `json:"pronouns"`
 	Phone          string     `json:"phone"`
 	DateOfBirth    *time.Time `json:"dateOfBirth,omitempty"`
 	Address        string     `json:"address"`
@@ -25,6 +28,19 @@ type Employee struct {
 	Status         string     `json:"status"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	UpdatedAt      time.Time  `json:"updatedAt"`
+}
+
+type EmergencyContact struct {
+	ID           string    `json:"id"`
+	EmployeeID   string    `json:"employeeId"`
+	FullName     string    `json:"fullName"`
+	Relationship string    `json:"relationship"`
+	Phone        string    `json:"phone"`
+	Email        string    `json:"email"`
+	Address      string    `json:"address"`
+	IsPrimary    bool      `json:"isPrimary"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 type Department struct {

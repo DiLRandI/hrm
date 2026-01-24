@@ -13,6 +13,7 @@ import GDPR from '../features/gdpr/pages/GDPR.jsx';
 import Reports from '../features/reports/pages/Reports.jsx';
 import Notifications from '../features/notifications/pages/Notifications.jsx';
 import Audit from '../features/audit/pages/Audit.jsx';
+import Profile from '../features/profile/pages/Profile.jsx';
 import { ROLE_HR } from '../shared/constants/roles.js';
 import RequireRole from './RequireRole.jsx';
 import { ToastProvider } from '../shared/components/ToastProvider.jsx';
@@ -46,6 +47,7 @@ function AppShell() {
           <NavLink to="/gdpr">GDPR</NavLink>
           <NavLink to="/reports">Reports</NavLink>
           <NavLink to="/notifications">Notifications</NavLink>
+          <NavLink to="/profile">Profile</NavLink>
           {role === ROLE_HR && <NavLink to="/audit">Audit</NavLink>}
         </nav>
         <button className="ghost" onClick={logout}>Log out</button>
@@ -61,6 +63,7 @@ function AppShell() {
             <Route path="/gdpr/*" element={<GDPR />} />
             <Route path="/reports/*" element={<Reports />} />
             <Route path="/notifications" element={<Notifications />} />
+            <Route path="/profile/*" element={<Profile />} />
             <Route
               path="/audit"
               element={

@@ -11,6 +11,9 @@ func FilterEmployeeFields(emp *Employee, user auth.UserContext, isSelf, isManage
 		emp.NationalID = ""
 		emp.BankAccount = ""
 		emp.Salary = nil
+		if !isSelf {
+			emp.PersonalEmail = ""
+		}
 		return
 	}
 
@@ -24,4 +27,5 @@ func FilterEmployeeFields(emp *Employee, user auth.UserContext, isSelf, isManage
 	emp.NationalID = ""
 	emp.BankAccount = ""
 	emp.Salary = nil
+	emp.PersonalEmail = ""
 }

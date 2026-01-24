@@ -1,5 +1,7 @@
 export const GDPR_DATA_CATEGORIES = [
   { value: 'audit', label: 'Audit events' },
+  { value: 'employee_profile', label: 'Employee profiles' },
+  { value: 'emergency_contacts', label: 'Emergency contacts' },
   { value: 'leave', label: 'Leave records' },
   { value: 'payroll', label: 'Payroll records' },
   { value: 'performance', label: 'Performance records' },

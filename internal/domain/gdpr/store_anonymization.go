@@ -38,8 +38,12 @@ func (s *Store) AnonymizeEmployeeTx(ctx context.Context, tx pgx.Tx, tenantID, em
         first_name = 'Anonymized',
         last_name = 'Employee',
         email = $1,
+        personal_email = NULL,
+        preferred_name = NULL,
+        pronouns = NULL,
         phone = NULL,
         address = NULL,
+        date_of_birth = NULL,
         national_id = NULL,
         national_id_enc = NULL,
         bank_account = NULL,
@@ -120,6 +124,14 @@ func (s *Store) ClearPayslipURLsTx(ctx context.Context, tx pgx.Tx, tenantID, emp
 	_, err := tx.Exec(ctx, `
     UPDATE payslips
     SET file_url = NULL
+    WHERE tenant_id = $1 AND employee_id = $2
+  `, tenantID, employeeID)
+	return err
+}
+
+func (s *Store) DeleteEmergencyContactsTx(ctx context.Context, tx pgx.Tx, tenantID, employeeID string) error {
+	_, err := tx.Exec(ctx, `
+    DELETE FROM employee_emergency_contacts
     WHERE tenant_id = $1 AND employee_id = $2
   `, tenantID, employeeID)
 	return err

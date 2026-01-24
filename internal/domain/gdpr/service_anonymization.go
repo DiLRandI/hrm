@@ -85,6 +85,11 @@ func (s *Service) ExecuteAnonymization(ctx context.Context, tenantID, jobID stri
 		return AnonymizationResult{}, err
 	}
 
+	if err := s.store.DeleteEmergencyContactsTx(ctx, tx, tenantID, employeeID); err != nil {
+		s.failAnonymization(ctx, tenantID, jobID)
+		return AnonymizationResult{}, err
+	}
+
 	if err := s.store.CompleteAnonymizationJobTx(ctx, tx, tenantID, jobID, AnonymizationCompleted); err != nil {
 		s.failAnonymization(ctx, tenantID, jobID)
 		return AnonymizationResult{}, err
