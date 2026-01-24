@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR } from '../../../shared/constants/roles.js';
+import { getRole } from '../../../shared/utils/role.js';
 import {
   PAYROLL_PERIOD_DRAFT,
   PAYROLL_PERIOD_REVIEWED,
@@ -25,7 +26,7 @@ const downloadBlob = ({ blob, filename }) => {
 
 export default function Payroll() {
   const { user, employee } = useAuth();
-  const isHR = (user?.role || user?.RoleName) === ROLE_HR;
+  const isHR = getRole(user) === ROLE_HR;
 
   const [schedules, setSchedules] = useState([]);
   const [groups, setGroups] = useState([]);

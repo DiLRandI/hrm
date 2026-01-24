@@ -115,11 +115,11 @@ async function download(path, options = {}) {
 }
 
 export const api = {
-  get: (path) => request(path),
-  getWithMeta: (path) => requestWithMeta(path),
-  post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
-  put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
-  del: (path) => request(path, { method: 'DELETE' }),
-  postRaw: (path, body, contentType) => requestRaw(path, { method: 'POST', body, contentType }),
+  get: (path, options) => request(path, options),
+  getWithMeta: (path, options) => requestWithMeta(path, options),
+  post: (path, body, options) => request(path, { method: 'POST', body: JSON.stringify(body), ...options }),
+  put: (path, body, options) => request(path, { method: 'PUT', body: JSON.stringify(body), ...options }),
+  del: (path, options) => request(path, { method: 'DELETE', ...options }),
+  postRaw: (path, body, contentType, options) => requestRaw(path, { method: 'POST', body, contentType, ...options }),
   download: (path, options) => download(path, options),
 };

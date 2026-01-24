@@ -1,46 +1,51 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useAuth } from '../../auth/auth.jsx';
 import { api } from '../../../services/apiClient.js';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
+import { getRole } from '../../../shared/utils/role.js';
+import { useApiQuery } from '../../../shared/hooks/useApiQuery.js';
+import { InlineError, PageStatus } from '../../../shared/components/PageStatus.jsx';
 
 export default function Dashboard() {
   const { user, employee, refresh } = useAuth();
-  const [data, setData] = useState(null);
-  const [error, setError] = useState('');
   const [mfaSecret, setMfaSecret] = useState('');
   const [mfaUrl, setMfaUrl] = useState('');
   const [mfaCode, setMfaCode] = useState('');
   const [mfaMessage, setMfaMessage] = useState('');
+  const role = getRole(user);
+  const dashboardEndpoint = useMemo(() => {
+    if (role === ROLE_HR) {
+      return '/reports/dashboard/hr';
+    }
+    if (role === ROLE_MANAGER) {
+      return '/reports/dashboard/manager';
+    }
+    return '/reports/dashboard/employee';
+  }, [role]);
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        if ((user?.role || user?.RoleName) === ROLE_HR) {
-          setData(await api.get('/reports/dashboard/hr'));
-        } else if ((user?.role || user?.RoleName) === ROLE_MANAGER) {
-          setData(await api.get('/reports/dashboard/manager'));
-        } else {
-          setData(await api.get('/reports/dashboard/employee'));
-        }
-      } catch (err) {
-        setError(err.message);
-      }
-    };
-    load();
-  }, [user]);
+  const fetchDashboard = useCallback(
+    ({ signal }) => api.get(dashboardEndpoint, { signal }),
+    [dashboardEndpoint],
+  );
+
+  const { data, error, loading } = useApiQuery(fetchDashboard, [dashboardEndpoint], { enabled: Boolean(user) });
 
   return (
     <section className="page">
       <header className="page-header">
         <div>
-          <h2>Welcome back, {employee?.firstName || (user?.role || user?.RoleName)}</h2>
+          <h2>Welcome back, {employee?.firstName || role}</h2>
           <p>Here’s your live snapshot across leave, payroll, and performance.</p>
         </div>
       </header>
 
-      {error && <div className="error">{error}</div>}
+      <InlineError message={error} />
 
-      {data && (
+      {loading && (
+        <PageStatus title="Loading dashboard" description="Fetching your latest HR snapshot." />
+      )}
+
+      {data && !loading && (
         <div className="card-grid">
           {Object.entries(data).map(([key, value]) => (
             <div key={key} className="card">

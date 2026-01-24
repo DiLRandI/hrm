@@ -13,10 +13,11 @@ import {
 } from '../../../shared/constants/statuses.js';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
 import { FEEDBACK_TYPES } from '../../../shared/constants/performance.js';
+import { getRole } from '../../../shared/utils/role.js';
 
 export default function Performance() {
   const { user, employee } = useAuth();
-  const role = user?.role || user?.RoleName;
+  const role = getRole(user);
   const isHR = role === ROLE_HR;
   const isManager = role === ROLE_MANAGER;
   const canViewSummary = isHR || isManager;

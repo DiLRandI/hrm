@@ -1,7 +1,7 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../features/auth/auth.jsx';
-import { ROLE_EMPLOYEE } from '../shared/constants/roles.js';
+import { getRole } from '../shared/utils/role.js';
 
 export default function RequireRole({ allowed, children }) {
   const { user, loading } = useAuth();
@@ -11,7 +11,7 @@ export default function RequireRole({ allowed, children }) {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  const role = user?.role || user?.RoleName || ROLE_EMPLOYEE;
+  const role = getRole(user);
   if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(role)) {
     return <Navigate to="/" replace />;
   }

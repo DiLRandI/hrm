@@ -20,6 +20,6 @@ describe('Dashboard', () => {
 
     const metricTitle = await screen.findByText('payrollPeriods');
     expect(metricTitle).toBeInTheDocument();
-    expect(api.get).toHaveBeenCalledWith('/reports/dashboard/hr');
+    expect(api.get).toHaveBeenCalledWith('/reports/dashboard/hr', expect.any(Object));
   });
 });

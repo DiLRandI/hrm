@@ -13,9 +13,10 @@ import GDPR from '../features/gdpr/pages/GDPR.jsx';
 import Reports from '../features/reports/pages/Reports.jsx';
 import Notifications from '../features/notifications/pages/Notifications.jsx';
 import Audit from '../features/audit/pages/Audit.jsx';
-import { ROLE_EMPLOYEE, ROLE_HR } from '../shared/constants/roles.js';
+import { ROLE_HR } from '../shared/constants/roles.js';
 import RequireRole from './RequireRole.jsx';
 import { ToastProvider } from '../shared/components/ToastProvider.jsx';
+import { getRole } from '../shared/utils/role.js';
 
 function AppShell() {
   const { user, logout, loading } = useAuth();
@@ -27,7 +28,7 @@ function AppShell() {
     return <Navigate to="/login" replace />;
   }
 
-  const role = user?.role || user?.RoleName || ROLE_EMPLOYEE;
+  const role = getRole(user);
 
   return (
     <div className="app-shell">

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR } from '../../../shared/constants/roles.js';
+import { getRole } from '../../../shared/utils/role.js';
 import { GDPR_DATA_CATEGORIES } from '../../../shared/constants/gdpr.js';
 import {
   ANONYMIZATION_STATUS_REQUESTED,
@@ -20,7 +21,7 @@ const downloadBlob = ({ blob, filename }) => {
 
 export default function GDPR() {
   const { user } = useAuth();
-  const isHR = (user?.role || user?.RoleName) === ROLE_HR;
+  const isHR = getRole(user) === ROLE_HR;
 
   const [dsars, setDsars] = useState([]);
   const [dsarTotal, setDsarTotal] = useState(0);

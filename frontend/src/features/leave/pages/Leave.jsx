@@ -1,11 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
-import {
-  LEAVE_STATUS_PENDING,
-  LEAVE_STATUS_PENDING_HR,
-} from '../../../shared/constants/statuses.js';
+import { getRole } from '../../../shared/utils/role.js';
+import { useApiQuery } from '../../../shared/hooks/useApiQuery.js';
+import { EmptyState, InlineError, PageStatus } from '../../../shared/components/PageStatus.jsx';
+import LeaveRequestsCard from '../components/LeaveRequestsCard.jsx';
+import LeaveBalancesCard from '../components/LeaveBalancesCard.jsx';
+import LeaveAdjustCard from '../components/LeaveAdjustCard.jsx';
+import LeaveTypesCard from '../components/LeaveTypesCard.jsx';
+import LeavePoliciesCard from '../components/LeavePoliciesCard.jsx';
+import LeaveHolidaysCard from '../components/LeaveHolidaysCard.jsx';
+import LeaveCalendarCard from '../components/LeaveCalendarCard.jsx';
+import LeaveReportsGrid from '../components/LeaveReportsGrid.jsx';
+
+const REQUEST_LIMIT = 25;
 
 const downloadBlob = ({ blob, filename }) => {
   const url = URL.createObjectURL(blob);
@@ -16,24 +25,17 @@ const downloadBlob = ({ blob, filename }) => {
   URL.revokeObjectURL(url);
 };
 
+const normalizeArray = (value) => (Array.isArray(value) ? value : []);
+
 export default function Leave() {
   const { user, employee } = useAuth();
-  const role = user?.role || user?.RoleName;
+  const role = getRole(user);
   const isHR = role === ROLE_HR;
   const isManager = role === ROLE_MANAGER;
 
-  const [types, setTypes] = useState([]);
-  const [policies, setPolicies] = useState([]);
-  const [balances, setBalances] = useState([]);
-  const [requests, setRequests] = useState([]);
   const [requestOffset, setRequestOffset] = useState(0);
-  const [requestTotal, setRequestTotal] = useState(0);
-  const [holidays, setHolidays] = useState([]);
-  const [calendar, setCalendar] = useState([]);
-  const [balanceReport, setBalanceReport] = useState([]);
-  const [usageReport, setUsageReport] = useState([]);
   const [accrualSummary, setAccrualSummary] = useState(null);
-  const [error, setError] = useState('');
+  const [actionError, setActionError] = useState('');
 
   const [requestForm, setRequestForm] = useState({
     leaveTypeId: '',
@@ -68,59 +70,81 @@ export default function Leave() {
     reason: '',
   });
 
-  const REQUEST_LIMIT = 25;
-
-  const typeLookup = useMemo(() => {
-    return types.reduce((acc, t) => {
-      acc[t.id] = t.name;
-      return acc;
-    }, {});
-  }, [types]);
-
-  const load = async () => {
-    setError('');
-    setAccrualSummary(null);
-    try {
-      const results = await Promise.allSettled([
-        api.get('/leave/types'),
-        api.get('/leave/policies'),
-        api.get('/leave/balances'),
-        api.get('/leave/holidays'),
-        api.get('/leave/calendar'),
-        api.get('/leave/reports/balances'),
-        api.get('/leave/reports/usage'),
+  const fetchLeaveData = useCallback(
+    async ({ signal }) => {
+      const [
+        types,
+        policies,
+        balances,
+        holidays,
+        calendar,
+        balanceReport,
+        usageReport,
+      ] = await Promise.all([
+        api.get('/leave/types', { signal }),
+        api.get('/leave/policies', { signal }),
+        api.get('/leave/balances', { signal }),
+        api.get('/leave/holidays', { signal }),
+        api.get('/leave/calendar', { signal }),
+        api.get('/leave/reports/balances', { signal }),
+        api.get('/leave/reports/usage', { signal }),
       ]);
 
-      const setters = [
-        setTypes,
-        setPolicies,
-        setBalances,
-        setHolidays,
-        setCalendar,
-        setBalanceReport,
-        setUsageReport,
-      ];
+      return {
+        types: normalizeArray(types),
+        policies: normalizeArray(policies),
+        balances: normalizeArray(balances),
+        holidays: normalizeArray(holidays),
+        calendar: normalizeArray(calendar),
+        balanceReport: normalizeArray(balanceReport),
+        usageReport: normalizeArray(usageReport),
+      };
+    },
+    [],
+  );
 
-      results.forEach((result, idx) => {
-        if (result.status === 'fulfilled') {
-          setters[idx](Array.isArray(result.value) ? result.value : []);
-        } else if (!error) {
-          setError(result.reason?.message || 'Failed to load leave data');
-        }
-      });
+  const {
+    data: leaveData,
+    error: leaveError,
+    loading: leaveLoading,
+    reload: reloadLeave,
+  } = useApiQuery(fetchLeaveData, [], {
+    initialData: {
+      types: [],
+      policies: [],
+      balances: [],
+      holidays: [],
+      calendar: [],
+      balanceReport: [],
+      usageReport: [],
+    },
+  });
 
-      const { data, total } = await api.getWithMeta(`/leave/requests?limit=${REQUEST_LIMIT}&offset=${requestOffset}`);
-      const reqList = Array.isArray(data) ? data : [];
-      setRequests(reqList);
-      setRequestTotal(total ?? reqList.length);
-    } catch (err) {
-      setError(err.message);
-    }
+  const fetchRequests = useCallback(
+    ({ signal }) => api.getWithMeta(`/leave/requests?limit=${REQUEST_LIMIT}&offset=${requestOffset}`, { signal }),
+    [requestOffset],
+  );
+
+  const {
+    data: requestPage,
+    error: requestError,
+    loading: requestsLoading,
+    reload: reloadRequests,
+  } = useApiQuery(fetchRequests, [requestOffset], { initialData: { data: [], total: 0 } });
+
+  const requests = normalizeArray(requestPage?.data);
+  const requestTotal = requestPage?.total ?? requests.length;
+
+  const typeLookup = useMemo(() => {
+    return leaveData.types.reduce((acc, type) => {
+      acc[type.id] = type.name;
+      return acc;
+    }, {});
+  }, [leaveData.types]);
+
+  const reloadAll = async () => {
+    await Promise.all([reloadLeave(), reloadRequests()]);
   };
-
-  useEffect(() => {
-    load();
-  }, [requestOffset]);
 
   const nextRequests = () => {
     if (requestOffset + REQUEST_LIMIT >= requestTotal) {
@@ -135,6 +159,7 @@ export default function Leave() {
 
   const submitRequest = async (event) => {
     event.preventDefault();
+    setActionError('');
     try {
       await api.post('/leave/requests', {
         employeeId: employee?.id,
@@ -144,25 +169,27 @@ export default function Leave() {
         reason: requestForm.reason,
       });
       setRequestForm({ leaveTypeId: '', startDate: '', endDate: '', reason: '' });
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const createType = async (event) => {
     event.preventDefault();
+    setActionError('');
     try {
       await api.post('/leave/types', typeForm);
       setTypeForm({ name: '', code: '', isPaid: true, requiresDoc: false });
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const createPolicy = async (event) => {
     event.preventDefault();
+    setActionError('');
     try {
       await api.post('/leave/policies', {
         leaveTypeId: policyForm.leaveTypeId,
@@ -182,34 +209,37 @@ export default function Leave() {
         allowNegative: false,
         requiresHrApproval: false,
       });
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const createHoliday = async (event) => {
     event.preventDefault();
+    setActionError('');
     try {
       await api.post('/leave/holidays', holidayForm);
       setHolidayForm({ date: '', name: '', region: '' });
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const deleteHoliday = async (holidayId) => {
+    setActionError('');
     try {
       await api.del(`/leave/holidays/${holidayId}`);
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const adjustBalance = async (event) => {
     event.preventDefault();
+    setActionError('');
     try {
       await api.post('/leave/balances/adjust', {
         employeeId: adjustForm.employeeId,
@@ -218,57 +248,65 @@ export default function Leave() {
         reason: adjustForm.reason,
       });
       setAdjustForm({ employeeId: '', leaveTypeId: '', delta: '', reason: '' });
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const runAccruals = async () => {
+    setActionError('');
     try {
       const summary = await api.post('/leave/accrual/run', {});
       setAccrualSummary(summary);
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const approveRequest = async (requestId) => {
+    setActionError('');
     try {
       await api.post(`/leave/requests/${requestId}/approve`, {});
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const rejectRequest = async (requestId) => {
+    setActionError('');
     try {
       await api.post(`/leave/requests/${requestId}/reject`, {});
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const cancelRequest = async (requestId) => {
+    setActionError('');
     try {
       await api.post(`/leave/requests/${requestId}/cancel`, {});
-      await load();
+      await reloadAll();
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
 
   const exportCalendar = async (format) => {
+    setActionError('');
     try {
       const file = await api.download(`/leave/calendar/export?format=${format}`);
       downloadBlob(file);
     } catch (err) {
-      setError(err.message);
+      setActionError(err.message);
     }
   };
+
+  const loading = leaveLoading || requestsLoading;
+  const combinedError = actionError || leaveError || requestError;
 
   return (
     <section className="page">
@@ -278,13 +316,18 @@ export default function Leave() {
           <p>Request time off, manage policies, and review balances.</p>
         </div>
         {isHR && (
-          <button type="button" onClick={runAccruals}>
+          <button type="button" onClick={runAccruals} disabled={loading}>
             Run accruals
           </button>
         )}
       </header>
 
-      {error && <div className="error">{error}</div>}
+      <InlineError message={combinedError} />
+
+      {loading && leaveData.types.length === 0 && (
+        <PageStatus title="Loading leave data" description="Gathering policies, balances, and requests." />
+      )}
+
       {accrualSummary && (
         <div className="card">
           <h3>Accrual Run</h3>
@@ -293,56 +336,21 @@ export default function Leave() {
         </div>
       )}
 
-      <div className="card">
-        <h3>Request Leave</h3>
-        <form className="inline-form" onSubmit={submitRequest}>
-          <select value={requestForm.leaveTypeId} onChange={(e) => setRequestForm({ ...requestForm, leaveTypeId: e.target.value })}>
-            <option value="">Leave type</option>
-            {types.map((type) => (
-              <option key={type.id} value={type.id}>{type.name}</option>
-            ))}
-          </select>
-          <input type="date" value={requestForm.startDate} onChange={(e) => setRequestForm({ ...requestForm, startDate: e.target.value })} />
-          <input type="date" value={requestForm.endDate} onChange={(e) => setRequestForm({ ...requestForm, endDate: e.target.value })} />
-          <input placeholder="Reason" value={requestForm.reason} onChange={(e) => setRequestForm({ ...requestForm, reason: e.target.value })} />
-          <button type="submit">Submit request</button>
-        </form>
-      </div>
+      <LeaveRequestsCard
+        types={leaveData.types}
+        typeLookup={typeLookup}
+        requests={requests}
+        requestForm={requestForm}
+        onFormChange={(field, value) => setRequestForm((prev) => ({ ...prev, [field]: value }))}
+        onSubmit={submitRequest}
+        isManager={isManager}
+        isHR={isHR}
+        onApprove={approveRequest}
+        onReject={rejectRequest}
+        onCancel={cancelRequest}
+        disabled={loading}
+      />
 
-      <div className="table">
-        <div className="table-row header">
-          <span>Employee</span>
-          <span>Type</span>
-          <span>Dates</span>
-          <span>Status</span>
-          <span>Actions</span>
-        </div>
-        {requests.map((req) => (
-          <div key={req.id} className="table-row">
-            <span>{req.employeeId}</span>
-            <span>{typeLookup[req.leaveTypeId] || req.leaveTypeId}</span>
-            <span>{req.startDate?.slice(0, 10)} → {req.endDate?.slice(0, 10)}</span>
-            <span>{req.status}</span>
-            <span className="row-actions">
-              {(isManager || isHR) && req.status === LEAVE_STATUS_PENDING && (
-                <>
-                  <button type="button" onClick={() => approveRequest(req.id)}>Approve</button>
-                  <button type="button" className="ghost" onClick={() => rejectRequest(req.id)}>Reject</button>
-                </>
-              )}
-              {isHR && req.status === LEAVE_STATUS_PENDING_HR && (
-                <>
-                  <button type="button" onClick={() => approveRequest(req.id)}>Approve</button>
-                  <button type="button" className="ghost" onClick={() => rejectRequest(req.id)}>Reject</button>
-                </>
-              )}
-              {!isHR && req.status === LEAVE_STATUS_PENDING && (
-                <button type="button" className="ghost" onClick={() => cancelRequest(req.id)}>Cancel</button>
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
       <div className="row-actions pagination">
         <button type="button" className="ghost" onClick={prevRequests} disabled={requestOffset === 0}>
           Prev
@@ -360,227 +368,72 @@ export default function Leave() {
         </button>
       </div>
 
-      <div className="card-grid">
-        <div className="card">
-          <h3>Balances</h3>
-          <div className="table">
-            <div className="table-row header">
-              <span>Employee</span>
-              <span>Type</span>
-              <span>Balance</span>
-              <span>Pending</span>
-              <span>Used</span>
-            </div>
-            {balances.map((row) => (
-              <div key={`${row.employeeId}-${row.leaveTypeId}`} className="table-row">
-                <span>{row.employeeId}</span>
-                <span>{typeLookup[row.leaveTypeId] || row.leaveTypeId}</span>
-                <span>{row.balance}</span>
-                <span>{row.pending}</span>
-                <span>{row.used}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {isHR && (
-          <div className="card">
-            <h3>Adjust Balance</h3>
-            <form className="inline-form" onSubmit={adjustBalance}>
-              <input placeholder="Employee ID" value={adjustForm.employeeId} onChange={(e) => setAdjustForm({ ...adjustForm, employeeId: e.target.value })} />
-              <select value={adjustForm.leaveTypeId} onChange={(e) => setAdjustForm({ ...adjustForm, leaveTypeId: e.target.value })}>
-                <option value="">Leave type</option>
-                {types.map((type) => (
-                  <option key={type.id} value={type.id}>{type.name}</option>
-                ))}
-              </select>
-              <input placeholder="Delta" value={adjustForm.delta} onChange={(e) => setAdjustForm({ ...adjustForm, delta: e.target.value })} />
-              <input placeholder="Reason" value={adjustForm.reason} onChange={(e) => setAdjustForm({ ...adjustForm, reason: e.target.value })} />
-              <button type="submit">Apply</button>
-            </form>
-          </div>
-        )}
-      </div>
-
-      {isHR && (
+      {leaveData.balances.length === 0 && !loading ? (
+        <EmptyState
+          title="No balances yet"
+          description="Balances and policy usage will appear once requests are created."
+        />
+      ) : (
         <div className="card-grid">
-          <div className="card">
-            <h3>Leave Types</h3>
-            <form className="inline-form" onSubmit={createType}>
-              <input placeholder="Name" value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} />
-              <input placeholder="Code" value={typeForm.code} onChange={(e) => setTypeForm({ ...typeForm, code: e.target.value })} />
-              <select value={typeForm.isPaid ? 'paid' : 'unpaid'} onChange={(e) => setTypeForm({ ...typeForm, isPaid: e.target.value === 'paid' })}>
-                <option value="paid">Paid</option>
-                <option value="unpaid">Unpaid</option>
-              </select>
-              <select value={typeForm.requiresDoc ? 'yes' : 'no'} onChange={(e) => setTypeForm({ ...typeForm, requiresDoc: e.target.value === 'yes' })}>
-                <option value="no">No doc</option>
-                <option value="yes">Requires doc</option>
-              </select>
-              <button type="submit">Add type</button>
-            </form>
-            <div className="table">
-              <div className="table-row header">
-                <span>Name</span>
-                <span>Code</span>
-                <span>Paid</span>
-              </div>
-              {types.map((type) => (
-                <div key={type.id} className="table-row">
-                  <span>{type.name}</span>
-                  <span>{type.code}</span>
-                  <span>{type.isPaid ? 'Yes' : 'No'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <h3>Policies</h3>
-            <form className="inline-form" onSubmit={createPolicy}>
-              <select value={policyForm.leaveTypeId} onChange={(e) => setPolicyForm({ ...policyForm, leaveTypeId: e.target.value })}>
-                <option value="">Leave type</option>
-                {types.map((type) => (
-                  <option key={type.id} value={type.id}>{type.name}</option>
-                ))}
-              </select>
-              <input placeholder="Accrual rate" value={policyForm.accrualRate} onChange={(e) => setPolicyForm({ ...policyForm, accrualRate: e.target.value })} />
-              <input placeholder="Entitlement" value={policyForm.entitlement} onChange={(e) => setPolicyForm({ ...policyForm, entitlement: e.target.value })} />
-              <input placeholder="Carry over limit" value={policyForm.carryOverLimit} onChange={(e) => setPolicyForm({ ...policyForm, carryOverLimit: e.target.value })} />
-              <select value={policyForm.accrualPeriod} onChange={(e) => setPolicyForm({ ...policyForm, accrualPeriod: e.target.value })}>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-              </select>
-              <select value={policyForm.allowNegative ? 'yes' : 'no'} onChange={(e) => setPolicyForm({ ...policyForm, allowNegative: e.target.value === 'yes' })}>
-                <option value="no">No negative</option>
-                <option value="yes">Allow negative</option>
-              </select>
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={policyForm.requiresHrApproval}
-                  onChange={(e) => setPolicyForm({ ...policyForm, requiresHrApproval: e.target.checked })}
-                />
-                Requires HR approval
-              </label>
-              <button type="submit">Add policy</button>
-            </form>
-            <div className="table">
-              <div className="table-row header">
-                <span>Type</span>
-                <span>Accrual</span>
-                <span>Entitlement</span>
-                <span>HR approval</span>
-              </div>
-              {policies.map((policy) => (
-                <div key={policy.id} className="table-row">
-                  <span>{typeLookup[policy.leaveTypeId] || policy.leaveTypeId}</span>
-                  <span>{policy.accrualRate} / {policy.accrualPeriod}</span>
-                  <span>{policy.entitlement}</span>
-                  <span>{policy.requiresHrApproval ? 'Required' : 'No'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <LeaveBalancesCard balances={leaveData.balances} typeLookup={typeLookup} />
+          {isHR && (
+            <LeaveAdjustCard
+              types={leaveData.types}
+              form={adjustForm}
+              onChange={(field, value) => setAdjustForm((prev) => ({ ...prev, [field]: value }))}
+              onSubmit={adjustBalance}
+              disabled={loading}
+            />
+          )}
         </div>
       )}
 
       {isHR && (
         <div className="card-grid">
-          <div className="card">
-            <h3>Holidays</h3>
-            <form className="inline-form" onSubmit={createHoliday}>
-              <input type="date" value={holidayForm.date} onChange={(e) => setHolidayForm({ ...holidayForm, date: e.target.value })} />
-              <input placeholder="Name" value={holidayForm.name} onChange={(e) => setHolidayForm({ ...holidayForm, name: e.target.value })} />
-              <input placeholder="Region" value={holidayForm.region} onChange={(e) => setHolidayForm({ ...holidayForm, region: e.target.value })} />
-              <button type="submit">Add holiday</button>
-            </form>
-            <div className="table">
-              <div className="table-row header">
-                <span>Date</span>
-                <span>Name</span>
-                <span>Region</span>
-                <span>Actions</span>
-              </div>
-              {holidays.map((holiday) => (
-                <div key={holiday.id} className="table-row">
-                  <span>{holiday.date?.slice(0, 10)}</span>
-                  <span>{holiday.name}</span>
-                  <span>{holiday.region || '-'}</span>
-                  <span>
-                    <button type="button" className="ghost" onClick={() => deleteHoliday(holiday.id)}>Delete</button>
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <h3>Calendar</h3>
-            <div className="row-actions">
-              <button type="button" onClick={() => exportCalendar('csv')}>Export CSV</button>
-              <button type="button" className="ghost" onClick={() => exportCalendar('ics')}>Export ICS</button>
-            </div>
-            <div className="table">
-              <div className="table-row header">
-                <span>Employee</span>
-                <span>Type</span>
-                <span>Dates</span>
-                <span>Status</span>
-              </div>
-              {calendar.map((item) => (
-                <div key={item.id} className="table-row">
-                  <span>{item.employeeId}</span>
-                  <span>{typeLookup[item.leaveTypeId] || item.leaveTypeId}</span>
-                  <span>{item.start?.slice(0, 10)} → {item.end?.slice(0, 10)}</span>
-                  <span>{item.status}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <LeaveTypesCard
+            types={leaveData.types}
+            form={typeForm}
+            onChange={(field, value) => setTypeForm((prev) => ({ ...prev, [field]: value }))}
+            onSubmit={createType}
+            disabled={loading}
+          />
+          <LeavePoliciesCard
+            types={leaveData.types}
+            policies={leaveData.policies}
+            typeLookup={typeLookup}
+            form={policyForm}
+            onChange={(field, value) => setPolicyForm((prev) => ({ ...prev, [field]: value }))}
+            onSubmit={createPolicy}
+            disabled={loading}
+          />
         </div>
       )}
 
       {isHR && (
         <div className="card-grid">
-          <div className="card">
-            <h3>Balance Report</h3>
-            <div className="table">
-              <div className="table-row header">
-                <span>Employee</span>
-                <span>Type</span>
-                <span>Balance</span>
-                <span>Pending</span>
-                <span>Used</span>
-              </div>
-              {balanceReport.map((row) => (
-                <div key={`${row.employeeId}-${row.leaveTypeId}`} className="table-row">
-                  <span>{row.employeeId}</span>
-                  <span>{typeLookup[row.leaveTypeId] || row.leaveTypeId}</span>
-                  <span>{row.balance}</span>
-                  <span>{row.pending}</span>
-                  <span>{row.used}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="card">
-            <h3>Usage Report</h3>
-            <div className="table">
-              <div className="table-row header">
-                <span>Type</span>
-                <span>Total days</span>
-              </div>
-              {usageReport.map((row) => (
-                <div key={row.leaveTypeId} className="table-row">
-                  <span>{typeLookup[row.leaveTypeId] || row.leaveTypeId}</span>
-                  <span>{row.totalDays}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <LeaveHolidaysCard
+            holidays={leaveData.holidays}
+            form={holidayForm}
+            onChange={(field, value) => setHolidayForm((prev) => ({ ...prev, [field]: value }))}
+            onSubmit={createHoliday}
+            onDelete={deleteHoliday}
+            disabled={loading}
+          />
+          <LeaveCalendarCard
+            calendar={leaveData.calendar}
+            typeLookup={typeLookup}
+            onExport={exportCalendar}
+            disabled={loading}
+          />
         </div>
+      )}
+
+      {isHR && (
+        <LeaveReportsGrid
+          balanceReport={leaveData.balanceReport}
+          usageReport={leaveData.usageReport}
+          typeLookup={typeLookup}
+        />
       )}
     </section>
   );
