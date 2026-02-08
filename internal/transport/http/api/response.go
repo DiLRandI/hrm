@@ -9,6 +9,7 @@ import (
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Details any    `json:"details,omitempty"`
 }
 
 type Envelope struct {
@@ -35,5 +36,13 @@ func Created(w http.ResponseWriter, data any, requestID string) {
 }
 
 func Fail(w http.ResponseWriter, status int, code, message, requestID string) {
-	WriteJSON(w, status, Envelope{Success: false, Error: &Error{Code: code, Message: message}, RequestID: requestID})
+	FailWithDetails(w, status, code, message, nil, requestID)
+}
+
+func FailWithDetails(w http.ResponseWriter, status int, code, message string, details any, requestID string) {
+	WriteJSON(w, status, Envelope{
+		Success:   false,
+		Error:     &Error{Code: code, Message: message, Details: details},
+		RequestID: requestID,
+	})
 }

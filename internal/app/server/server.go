@@ -168,14 +168,15 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
+		r.Use(middleware.SensitiveMutationRateLimit(cfg.RateLimitPerMinute, time.Minute))
 		auditSvc := audit.New(pool)
 
 		authService := authdomain.NewService(authdomain.NewStore(pool))
 		authHandler := authhandler.NewHandler(authService, cfg.JWTSecret, cryptoSvc, notifySvc.Mailer, cfg.EmailFrom, cfg.FrontendBaseURL, cfg.PasswordResetTTL, auditSvc)
-		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/login", authHandler.HandleLogin)
+		r.Post("/auth/login", authHandler.HandleLogin)
 		r.Post("/auth/logout", authHandler.HandleLogout)
 		r.Post("/auth/refresh", authHandler.HandleRefresh)
-		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/request-reset", authHandler.HandleRequestReset)
+		r.Post("/auth/request-reset", authHandler.HandleRequestReset)
 		r.Post("/auth/reset", authHandler.HandleResetPassword)
 		r.Post("/auth/mfa/setup", authHandler.HandleMFASetup)
 		r.Post("/auth/mfa/enable", authHandler.HandleMFAEnable)

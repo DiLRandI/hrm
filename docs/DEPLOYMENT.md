@@ -44,5 +44,9 @@ docker compose up --build
 - `SMTP_PASSWORD`
 - `SMTP_USE_TLS` (default `true`)
 
+### Notes for immediate-priority controls
+- No additional environment variables were introduced for the final hardening pass.
+- Sensitive mutation endpoint throttling now uses `RATE_LIMIT_PER_MINUTE` as the base value and applies stricter per-endpoint windows internally (auth routes are throttled by both IP and email; authenticated sensitive mutations are throttled by user with IP fallback).
+
 ## Kubernetes
 Use `deployments/k8s` for baseline manifests. Postgres should be deployed as a separate stateful service.

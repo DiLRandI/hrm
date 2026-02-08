@@ -181,8 +181,8 @@ func TestLeaveRequestRejectsInvalidSingleDayHalfDayCombination(t *testing.T) {
 		"endHalf":     true,
 		"reason":      "Invalid combo",
 	}, http.StatusBadRequest)
-	if code := envelopeErrorCode(resp); code != "invalid_dates" {
-		t.Fatalf("expected invalid_dates for single-day startHalf+endHalf, got %+v", resp.Error)
+	if code := envelopeErrorCode(resp); code != "validation_error" {
+		t.Fatalf("expected validation_error for single-day startHalf+endHalf, got %+v", resp.Error)
 	}
 }
 

@@ -26,7 +26,12 @@ export default function Reports() {
   }, [location.pathname]);
   const [data, setData] = useState(null);
   const [jobRuns, setJobRuns] = useState([]);
+  const [jobRunsTotal, setJobRunsTotal] = useState(0);
   const [jobFilter, setJobFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [startedFrom, setStartedFrom] = useState('');
+  const [startedTo, setStartedTo] = useState('');
+  const [selectedRun, setSelectedRun] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -40,15 +45,32 @@ export default function Reports() {
           setData(await api.get('/reports/dashboard/employee'));
         }
         if (isHR && activeSection === 'jobs') {
-          const runs = await api.get(`/reports/jobs${jobFilter ? `?jobType=${jobFilter}` : ''}`);
-          setJobRuns(Array.isArray(runs) ? runs : []);
+          const params = new URLSearchParams();
+          if (jobFilter) params.set('jobType', jobFilter);
+          if (statusFilter) params.set('status', statusFilter);
+          if (startedFrom) params.set('startedFrom', startedFrom);
+          if (startedTo) params.set('startedTo', startedTo);
+          const query = params.toString();
+          const result = await api.getWithMeta(`/reports/jobs${query ? `?${query}` : ''}`);
+          const runs = Array.isArray(result?.data) ? result.data : [];
+          setJobRuns(runs);
+          setJobRunsTotal(result?.total ?? runs.length);
+          setSelectedRun(null);
         }
       } catch (err) {
         setError(err.message);
       }
     };
     load();
-  }, [role, isHR, isManager, jobFilter, activeSection]);
+  }, [role, isHR, isManager, jobFilter, statusFilter, startedFrom, startedTo, activeSection]);
+
+  const viewRunDetails = async (runId) => {
+    try {
+      setSelectedRun(await api.get(`/reports/jobs/${runId}`));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   const exportDashboard = async () => {
     try {
@@ -62,6 +84,16 @@ export default function Reports() {
     } catch (err) {
       setError(err.message);
     }
+  };
+
+  const summarizeRunDetails = (details) => {
+    if (!details || typeof details !== 'object') return '—';
+    if (typeof details.error === 'string' && details.error) return details.error;
+    if (typeof details.deleted === 'number') return `Deleted ${details.deleted}`;
+    if (typeof details.processed === 'number') return `Processed ${details.processed}`;
+    const asText = JSON.stringify(details);
+    if (!asText || asText === '{}') return '—';
+    return asText.length > 80 ? `${asText.slice(0, 80)}…` : asText;
   };
 
   return (
@@ -118,13 +150,35 @@ export default function Reports() {
                     <option value="gdpr_retention">GDPR retention</option>
                     <option value="payroll_run">Payroll run</option>
                   </select>
+                  <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                    <option value="">All statuses</option>
+                    <option value="running">Running</option>
+                    <option value="completed">Completed</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                  <input type="date" value={startedFrom} onChange={(e) => setStartedFrom(e.target.value)} aria-label="Started from" />
+                  <input type="date" value={startedTo} onChange={(e) => setStartedTo(e.target.value)} aria-label="Started to" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setJobFilter('');
+                      setStatusFilter('');
+                      setStartedFrom('');
+                      setStartedTo('');
+                    }}
+                  >
+                    Clear
+                  </button>
                 </div>
+                <p>{jobRunsTotal} run(s)</p>
                 <div className="table">
                   <div className="table-row header">
                     <span>Job</span>
                     <span>Status</span>
                     <span>Started</span>
                     <span>Completed</span>
+                    <span>Details</span>
+                    <span>Actions</span>
                   </div>
                   {jobRuns.map((run) => (
                     <div key={run.id} className="table-row">
@@ -132,9 +186,19 @@ export default function Reports() {
                       <span>{run.status}</span>
                       <span>{run.startedAt?.slice(0, 10)}</span>
                       <span>{run.completedAt ? run.completedAt.slice(0, 10) : '—'}</span>
+                      <span>{summarizeRunDetails(run.details)}</span>
+                      <span>
+                        <button type="button" onClick={() => viewRunDetails(run.id)}>View</button>
+                      </span>
                     </div>
                   ))}
                 </div>
+                {selectedRun && (
+                  <div className="card">
+                    <h4>Run details: {selectedRun.id}</h4>
+                    <pre>{JSON.stringify(selectedRun.details || {}, null, 2)}</pre>
+                  </div>
+                )}
               </div>
             }
           />

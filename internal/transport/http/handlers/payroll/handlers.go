@@ -283,26 +283,24 @@ func (h *Handler) handleCreatePeriod(w http.ResponseWriter, r *http.Request) {
 
 	var payload payrollPeriodPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
-		return
-	}
-	if payload.ScheduleID == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "schedule id required", middleware.GetRequestID(r.Context()))
-		return
-	}
-
-	startDate, err := shared.ParseDate(payload.StartDate)
-	if err != nil || startDate.IsZero() {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid start date", middleware.GetRequestID(r.Context()))
-		return
-	}
-	endDate, err := shared.ParseDate(payload.EndDate)
-	if err != nil || endDate.IsZero() {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid end date", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
 		return
 	}
 
-	id, err := h.Service.CreatePeriod(r.Context(), user.TenantID, payload.ScheduleID, startDate, endDate)
+	validator := shared.NewValidator()
+	validator.Required("scheduleId", payload.ScheduleID, "is required")
+	startDate, startValid := validator.Date("startDate", payload.StartDate)
+	endDate, endValid := validator.Date("endDate", payload.EndDate)
+	if startValid && endValid {
+		validator.DateOrder("startDate", startDate, "endDate", endDate)
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
+		return
+	}
+
+	id, err := h.Service.CreatePeriod(r.Context(), user.TenantID, strings.TrimSpace(payload.ScheduleID), startDate, endDate)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_period_create_failed", "failed to create period", middleware.GetRequestID(r.Context()))
 		return
@@ -350,15 +348,37 @@ func (h *Handler) handleCreateInput(w http.ResponseWriter, r *http.Request) {
 	periodID := chi.URLParam(r, "periodID")
 	var payload payroll.Input
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
 		return
 	}
 
+	payload.EmployeeID = strings.TrimSpace(payload.EmployeeID)
+	payload.ElementID = strings.TrimSpace(payload.ElementID)
 	if payload.Amount == 0 && payload.Units > 0 {
 		payload.Amount = payload.Units * payload.Rate
 	}
 	if payload.Source == "" {
 		payload.Source = payroll.InputSourceManual
+	}
+	payload.Source = strings.ToLower(strings.TrimSpace(payload.Source))
+
+	validator := shared.NewValidator()
+	validator.Required("employeeId", payload.EmployeeID, "is required")
+	validator.Required("elementId", payload.ElementID, "is required")
+	validator.Enum("source", payload.Source, []string{payroll.InputSourceManual, payroll.InputSourceImport}, "must be one of: manual, import")
+	if payload.Units < 0 {
+		validator.Add("units", "must be greater than or equal to 0")
+	}
+	if payload.Rate < 0 {
+		validator.Add("rate", "must be greater than or equal to 0")
+	}
+	if payload.Amount <= 0 {
+		validator.Add("amount", "must be greater than 0")
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
+		return
 	}
 
 	if err := h.Service.CreateInput(r.Context(), user.TenantID, periodID, payload); err != nil {
@@ -553,36 +573,43 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 	}
 
 	periodID := chi.URLParam(r, "periodID")
-	currentStatus, err := h.Service.PeriodStatus(r.Context(), user.TenantID, periodID)
-	if err != nil {
-		api.Fail(w, http.StatusNotFound, "not_found", "payroll period not found", middleware.GetRequestID(r.Context()))
-		return
-	}
-	if currentStatus != payroll.PeriodStatusReviewed {
-		api.Fail(w, http.StatusBadRequest, "invalid_state", "payroll period must be reviewed before finalize", middleware.GetRequestID(r.Context()))
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" {
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "Idempotency-Key", Reason: "header is required for payroll finalization"},
+		})
 		return
 	}
 
-	idempotencyKey := r.Header.Get("Idempotency-Key")
 	requestHash := middleware.RequestHash([]byte(periodID))
-	if idempotencyKey != "" {
-		stored, found, err := h.Idem.Check(r.Context(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash)
-		if err != nil {
-			slog.Warn("idempotency check failed", "err", err)
-		}
-		if found {
-			api.Success(w, json.RawMessage(stored), middleware.GetRequestID(r.Context()))
-			return
-		}
+	stored, found, err := h.Idem.Check(r.Context(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash)
+	if errors.Is(err, middleware.ErrIdempotencyConflict) {
+		api.Fail(w, http.StatusConflict, "idempotency_conflict", "idempotency key already used with a different request payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if err != nil {
+		slog.Warn("idempotency check failed", "err", err)
+	}
+	if found {
+		api.Success(w, json.RawMessage(stored), middleware.GetRequestID(r.Context()))
+		return
 	}
 
 	if err := h.Service.FinalizePeriod(r.Context(), user.TenantID, periodID); err != nil {
+		if h.Audit != nil {
+			if auditErr := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "payroll.finalize.failed", "payroll_period", periodID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{"error": err.Error()}); auditErr != nil {
+				slog.Warn("audit payroll.finalize.failed failed", "err", auditErr)
+			}
+		}
+		if errors.Is(err, payroll.ErrPeriodNotFound) {
+			api.Fail(w, http.StatusNotFound, "not_found", "payroll period not found", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if errors.Is(err, payroll.ErrFinalizeInvalidState) || errors.Is(err, payroll.ErrFinalizeNoResults) {
+			api.Fail(w, http.StatusBadRequest, "invalid_state", err.Error(), middleware.GetRequestID(r.Context()))
+			return
+		}
 		api.Fail(w, http.StatusInternalServerError, "payroll_finalize_failed", "failed to finalize payroll", middleware.GetRequestID(r.Context()))
-		return
-	}
-
-	if err := h.Service.CreatePayslipsForPeriod(r.Context(), periodID); err != nil {
-		api.Fail(w, http.StatusInternalServerError, "payroll_finalize_failed", "failed to generate payslips", middleware.GetRequestID(r.Context()))
 		return
 	}
 
@@ -618,10 +645,12 @@ func (h *Handler) handleFinalizePayroll(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		slog.Warn("finalize response marshal failed", "err", err)
 	}
-	if idempotencyKey != "" {
-		if err := h.Idem.Save(r.Context(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash, payload); err != nil {
-			slog.Warn("idempotency save failed", "err", err)
+	if err := h.Idem.Save(r.Context(), user.TenantID, user.UserID, "payroll.finalize", idempotencyKey, requestHash, payload); err != nil {
+		if errors.Is(err, middleware.ErrIdempotencyConflict) {
+			api.Fail(w, http.StatusConflict, "idempotency_conflict", "idempotency key already used with a different request payload", middleware.GetRequestID(r.Context()))
+			return
 		}
+		slog.Warn("idempotency save failed", "err", err)
 	}
 
 	api.Success(w, response, middleware.GetRequestID(r.Context()))
@@ -679,14 +708,20 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 	periodID := chi.URLParam(r, "periodID")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "unable to read csv payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "unable to read CSV payload"},
+		})
 		return
 	}
 
-	idempotencyKey := r.Header.Get("Idempotency-Key")
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
 	requestHash := middleware.RequestHash(body)
 	if idempotencyKey != "" {
 		stored, found, err := h.Idem.Check(r.Context(), user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash)
+		if errors.Is(err, middleware.ErrIdempotencyConflict) {
+			api.Fail(w, http.StatusConflict, "idempotency_conflict", "idempotency key already used with a different request payload", middleware.GetRequestID(r.Context()))
+			return
+		}
 		if err != nil {
 			slog.Warn("idempotency check failed", "err", err)
 		}
@@ -699,13 +734,15 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 	reader := csv.NewReader(bytes.NewReader(body))
 	headers, err := reader.Read()
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid csv payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "CSV header row is required"},
+		})
 		return
 	}
 
 	index := map[string]int{}
-	for i, h := range headers {
-		index[strings.ToLower(strings.TrimSpace(h))] = i
+	for i, header := range headers {
+		index[strings.ToLower(strings.TrimSpace(header))] = i
 	}
 
 	get := func(row []string, key string) string {
@@ -715,62 +752,96 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 		return ""
 	}
 
-	inserted := 0
+	validator := shared.NewValidator()
+	insertRows := make([]payroll.Input, 0, 32)
+	rowNumber := 1
 	for {
 		row, err := reader.Read()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid csv payload", middleware.GetRequestID(r.Context()))
-			return
+			validator.Add("rows", "row "+strconv.Itoa(rowNumber+1)+" is malformed")
+			break
 		}
-		employeeID := get(row, "employee_id")
+		rowNumber++
+
+		employeeID := strings.TrimSpace(get(row, "employee_id"))
 		if employeeID == "" {
 			if email := get(row, "employee_email"); email != "" {
 				if id, err := h.Service.FindEmployeeIDByEmail(r.Context(), user.TenantID, email); err != nil {
-					slog.Warn("import input employee lookup failed", "email", email, "err", err)
+					validator.Add("rows["+strconv.Itoa(rowNumber)+"].employeeEmail", "employee not found for email "+email)
 				} else {
 					employeeID = id
 				}
 			}
 		}
-		elementID := get(row, "element_id")
-		units, err := strconv.ParseFloat(get(row, "units"), 64)
-		if err != nil {
-			slog.Warn("import input units parse failed", "err", err)
-			units = 0
+		if employeeID == "" {
+			validator.Add("rows["+strconv.Itoa(rowNumber)+"].employeeId", "employee_id or resolvable employee_email is required")
 		}
-		rate, err := strconv.ParseFloat(get(row, "rate"), 64)
-		if err != nil {
-			slog.Warn("import input rate parse failed", "err", err)
-			rate = 0
+
+		elementID := strings.TrimSpace(get(row, "element_id"))
+		if elementID == "" {
+			validator.Add("rows["+strconv.Itoa(rowNumber)+"].elementId", "is required")
 		}
-		amount, err := strconv.ParseFloat(get(row, "amount"), 64)
-		if err != nil {
-			slog.Warn("import input amount parse failed", "err", err)
-			amount = 0
+
+		parseFloat := func(field, raw string) float64 {
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				return 0
+			}
+			value, parseErr := strconv.ParseFloat(raw, 64)
+			if parseErr != nil {
+				validator.Add("rows["+strconv.Itoa(rowNumber)+"]."+field, "must be a valid number")
+				return 0
+			}
+			return value
 		}
-		source := get(row, "source")
+
+		units := parseFloat("units", get(row, "units"))
+		rate := parseFloat("rate", get(row, "rate"))
+		amount := parseFloat("amount", get(row, "amount"))
+		if units < 0 {
+			validator.Add("rows["+strconv.Itoa(rowNumber)+"].units", "must be greater than or equal to 0")
+		}
+		if rate < 0 {
+			validator.Add("rows["+strconv.Itoa(rowNumber)+"].rate", "must be greater than or equal to 0")
+		}
+		if amount < 0 {
+			validator.Add("rows["+strconv.Itoa(rowNumber)+"].amount", "must be greater than or equal to 0")
+		}
+
+		source := strings.ToLower(strings.TrimSpace(get(row, "source")))
 		if source == "" {
 			source = payroll.InputSourceImport
 		}
+		validator.Enum("rows["+strconv.Itoa(rowNumber)+"].source", source, []string{payroll.InputSourceImport, payroll.InputSourceManual}, "must be one of: import, manual")
+
 		if amount == 0 && units > 0 {
 			amount = units * rate
 		}
-		if employeeID == "" || elementID == "" {
-			continue
+		if amount <= 0 {
+			validator.Add("rows["+strconv.Itoa(rowNumber)+"].amount", "must be greater than 0")
 		}
-		if err := h.Service.CreateInput(r.Context(), user.TenantID, periodID, payroll.Input{
+
+		insertRows = append(insertRows, payroll.Input{
 			EmployeeID: employeeID,
 			ElementID:  elementID,
 			Units:      units,
 			Rate:       rate,
 			Amount:     amount,
 			Source:     source,
-		}); err != nil {
-			slog.Warn("import input insert failed", "err", err)
-			continue
+		})
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
+		return
+	}
+
+	inserted := 0
+	for _, input := range insertRows {
+		if err := h.Service.CreateInput(r.Context(), user.TenantID, periodID, input); err != nil {
+			api.Fail(w, http.StatusInternalServerError, "payroll_input_failed", "failed to import one or more input rows", middleware.GetRequestID(r.Context()))
+			return
 		}
 		inserted++
 	}
@@ -784,6 +855,10 @@ func (h *Handler) handleImportInputs(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("idempotency response marshal failed", "err", err)
 		} else if err := h.Idem.Save(r.Context(), user.TenantID, user.UserID, "payroll.inputs.import", idempotencyKey, requestHash, encoded); err != nil {
+			if errors.Is(err, middleware.ErrIdempotencyConflict) {
+				api.Fail(w, http.StatusConflict, "idempotency_conflict", "idempotency key already used with a different request payload", middleware.GetRequestID(r.Context()))
+				return
+			}
 			slog.Warn("idempotency save failed", "err", err)
 		}
 	}
@@ -836,22 +911,30 @@ func (h *Handler) handleCreateAdjustment(w http.ResponseWriter, r *http.Request)
 		EffectiveDate string  `json:"effectiveDate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
 		return
 	}
-	if payload.EmployeeID == "" || payload.Description == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id and description required", middleware.GetRequestID(r.Context()))
-		return
+
+	payload.EmployeeID = strings.TrimSpace(payload.EmployeeID)
+	payload.Description = strings.TrimSpace(payload.Description)
+	validator := shared.NewValidator()
+	validator.Required("employeeId", payload.EmployeeID, "is required")
+	validator.Required("description", payload.Description, "is required")
+	if payload.Amount == 0 {
+		validator.Add("amount", "must be non-zero")
 	}
 
 	var effectiveDate any
 	if payload.EffectiveDate != "" {
-		parsed, err := shared.ParseDate(payload.EffectiveDate)
-		if err != nil {
-			api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid effective date", middleware.GetRequestID(r.Context()))
-			return
+		parsed, ok := validator.Date("effectiveDate", payload.EffectiveDate)
+		if ok {
+			effectiveDate = parsed
 		}
-		effectiveDate = parsed
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
+		return
 	}
 
 	id, err := h.Service.CreateAdjustment(r.Context(), user.TenantID, periodID, payload.EmployeeID, payload.Description, payload.Amount, effectiveDate)

@@ -78,12 +78,14 @@ Status (2026-02-08): Complete (implementation and integration tests in place)
 ---
 
 ## B. Broader abuse protection on sensitive mutation endpoints
+Status (2026-02-08): Complete (policy middleware, retry metadata, metrics, and tests implemented)
+
 ### B1. Checklist
-- [ ] Define a sensitive-endpoint rate-limit policy (per user and per IP fallback).
-- [ ] Apply stricter rate limits to high-risk POST/PUT actions.
-- [ ] Return `429` consistently with retry metadata.
-- [ ] Track rate-limited counts in logs/metrics.
-- [ ] Add tests covering allowed vs throttled behavior.
+- [x] Define a sensitive-endpoint rate-limit policy (per user and per IP fallback).
+- [x] Apply stricter rate limits to high-risk POST/PUT actions.
+- [x] Return `429` consistently with retry metadata.
+- [x] Track rate-limited counts in logs/metrics.
+- [x] Add tests covering allowed vs throttled behavior.
 
 ### B2. Implementation guidance
 - Primary files:
@@ -106,21 +108,23 @@ Status (2026-02-08): Complete (implementation and integration tests in place)
 - 429 responses are consistent and observable.
 
 ### B4. Test checklist
-- [ ] Middleware unit tests for keying and window reset.
-- [ ] Integration tests for representative sensitive routes.
-- [ ] Regression test that standard read/list routes are unaffected.
+- [x] Middleware unit tests for keying and window reset.
+- [x] Integration tests for representative sensitive routes.
+- [x] Regression test that standard read/list routes are unaffected.
 
 ---
 
 ## C. Structured payload validation for enums/ranges/date logic
+Status (2026-02-08): Complete (shared validator + endpoint hardening + tests implemented)
+
 ### C1. Checklist
-- [ ] Introduce a shared validation layer/helper.
-- [ ] Validate enums against domain constants (statuses, frequencies, element types).
-- [ ] Validate ranges and bounds (amounts, weights, percentages, day/month limits).
-- [ ] Validate date logic (`start <= end`, non-zero dates, optional max window rules).
-- [ ] Return consistent error shape with field-level messages.
-- [ ] Apply first to high-risk write endpoints.
-- [ ] Add endpoint-level tests for invalid payload cases.
+- [x] Introduce a shared validation layer/helper.
+- [x] Validate enums against domain constants (statuses, frequencies, element types).
+- [x] Validate ranges and bounds (amounts, weights, percentages, day/month limits).
+- [x] Validate date logic (`start <= end`, non-zero dates, optional max window rules).
+- [x] Return consistent error shape with field-level messages.
+- [x] Apply first to high-risk write endpoints.
+- [x] Add endpoint-level tests for invalid payload cases.
 
 ### C2. Implementation guidance
 - Primary files:
@@ -146,23 +150,25 @@ Status (2026-02-08): Complete (implementation and integration tests in place)
 - Existing valid payloads continue to work.
 
 ### C4. Test checklist
-- [ ] Table-driven validation tests for each hardened endpoint.
-- [ ] Journey tests confirm valid flows unaffected.
+- [x] Table-driven validation tests for each hardened endpoint.
+- [x] Journey tests confirm valid flows unaffected.
 
 ---
 
 ## D. Transactional payroll finalization and hard idempotency
+Status (2026-02-08): Complete (transactional finalize flow, idempotency conflict handling, and tests implemented)
+
 ### D1. Checklist
-- [ ] Move finalize flow into a single transactional service method.
-- [ ] Lock payroll period row and re-check current state in transaction.
-- [ ] Create/update payslip rows within the same transaction.
-- [ ] Commit only after state + records are consistent.
-- [ ] Harden idempotency:
+- [x] Move finalize flow into a single transactional service method.
+- [x] Lock payroll period row and re-check current state in transaction.
+- [x] Create/update payslip rows within the same transaction.
+- [x] Commit only after state + records are consistent.
+- [x] Harden idempotency:
   - same key + same request hash returns stored response.
   - same key + different request hash returns conflict error.
-- [ ] Keep external side effects (PDF generation/notifications) post-commit.
-- [ ] Add rollback-safe failure handling and audit.
-- [ ] Add integration tests for retry/concurrency paths.
+- [x] Keep external side effects (PDF generation/notifications) post-commit.
+- [x] Add rollback-safe failure handling and audit.
+- [x] Add integration tests for retry/concurrency paths.
 
 ### D2. Implementation guidance
 - Primary files:
@@ -183,10 +189,10 @@ Status (2026-02-08): Complete (implementation and integration tests in place)
 - Concurrent finalize attempts resolve deterministically.
 
 ### D4. Test checklist
-- [ ] Integration: finalize success and idempotent replay.
-- [ ] Integration: same key with different payload -> conflict.
-- [ ] Integration: induced failure mid-flow -> transaction rollback.
-- [ ] Integration: concurrent finalize requests.
+- [x] Integration: finalize success and idempotent replay.
+- [x] Integration: same key with different payload -> conflict.
+- [x] Integration: induced failure mid-flow -> transaction rollback.
+- [x] Integration: concurrent finalize requests.
 
 ---
 
@@ -236,13 +242,15 @@ Status (2026-02-08): Complete (API + UI + tests delivered)
 ---
 
 ## F. Reliable operations monitoring endpoints
+Status (2026-02-08): Complete (query fix, filters, detail endpoint, pagination metadata, UI and tests implemented)
+
 ### F1. Checklist
-- [ ] Fix job-runs query parameter indexing bug.
-- [ ] Ensure consistent pagination metadata (`X-Total-Count`) for job-runs list.
-- [ ] Add filters for job status and date range.
-- [ ] Add endpoint for single job-run detail (including failure reason/details).
-- [ ] Add tests for filtered/unfiltered queries and pagination.
-- [ ] Update reports UI to show status/details reliably.
+- [x] Fix job-runs query parameter indexing bug.
+- [x] Ensure consistent pagination metadata (`X-Total-Count`) for job-runs list.
+- [x] Add filters for job status and date range.
+- [x] Add endpoint for single job-run detail (including failure reason/details).
+- [x] Add tests for filtered/unfiltered queries and pagination.
+- [x] Update reports UI to show status/details reliably.
 
 ### F2. Implementation guidance
 - Primary files:
@@ -264,18 +272,18 @@ Status (2026-02-08): Complete (API + UI + tests delivered)
 - Operators can identify failed runs and relevant details without DB access.
 
 ### F4. Test checklist
-- [ ] Unit/integration tests for query variants and pagination.
-- [ ] UI test for jobs filter and table rendering.
+- [x] Unit/integration tests for query variants and pagination.
+- [x] UI test for jobs filter and table rendering.
 
 ---
 
 ## 4) Definition of done for this initiative
-- [ ] All six items implemented and merged.
-- [ ] Test coverage added for critical paths and failure modes.
-- [ ] `docs/API.md` updated for any changed payloads/endpoints.
-- [ ] `docs/DEPLOYMENT.md` updated for new environment variables.
-- [ ] Security and data-protection review completed for new flows.
-- [ ] Implementation log updated with completion dates and scope.
+- [x] All six items implemented and ready to merge.
+- [x] Test coverage added for critical paths and failure modes.
+- [x] `docs/API.md` updated for any changed payloads/endpoints.
+- [x] `docs/DEPLOYMENT.md` updated for new environment variables.
+- [x] Security and data-protection review completed for new flows.
+- [x] Implementation log updated with completion dates and scope.
 
 ## 5) Release and rollback guidance
 - Release strategy:

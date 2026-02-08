@@ -12,7 +12,7 @@ Base path: `/api/v1`
 - `POST /auth/logout`
 - `POST /auth/refresh`
 - `POST /auth/request-reset` → { email } (returns generic success; sends reset link email when account exists)
-- `POST /auth/reset` → { token, newPassword }
+- `POST /auth/reset` → { token, newPassword } (`validation_error` with field-level details for weak/missing password inputs)
 - `POST /auth/mfa/setup`
 - `POST /auth/mfa/enable`
 - `POST /auth/mfa/disable`
@@ -81,7 +81,7 @@ Base path: `/api/v1`
 - `POST /payroll/periods/{id}/adjustments`
 - `GET /payroll/periods/{id}/summary`
 - `POST /payroll/periods/{id}/run`
-- `POST /payroll/periods/{id}/finalize`
+- `POST /payroll/periods/{id}/finalize` (requires `Idempotency-Key`; returns `idempotency_conflict` on key/payload mismatch)
 - `POST /payroll/periods/{id}/reopen`
 - `GET /payroll/periods/{id}/export/register`
 - `GET /payroll/periods/{id}/export/journal`
@@ -134,7 +134,14 @@ Base path: `/api/v1`
 - `GET /reports/dashboard/employee/export`
 - `GET /reports/dashboard/manager/export`
 - `GET /reports/dashboard/hr/export`
+- `GET /reports/jobs` (`jobType`, `status`, `startedFrom`, `startedTo`, pagination + `X-Total-Count`)
+- `GET /reports/jobs/{runId}` (single job-run detail including structured `details`)
 - `GET /notifications`
 - `POST /notifications/{id}/read`
 - `GET /notifications/settings`
 - `PUT /notifications/settings`
+
+## Error conventions
+- Hardened write endpoints return `validation_error` with `error.details.fields[]` entries containing `field` and `reason`.
+- Idempotent compliance endpoints return `idempotency_conflict` (`409`) when the same key is reused with a different request hash.
+- Sensitive mutation rate limits return `429` with `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`.

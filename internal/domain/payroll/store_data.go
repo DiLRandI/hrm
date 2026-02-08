@@ -3,9 +3,12 @@ package payroll
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) ListSchedules(ctx context.Context, tenantID string) ([]Schedule, error) {
@@ -419,10 +422,68 @@ func (s *Store) UpdatePeriodStatus(ctx context.Context, tenantID, periodID, stat
 }
 
 func (s *Store) FinalizePeriod(ctx context.Context, tenantID, periodID string) error {
-	_, err := s.DB.Exec(ctx, `
-    UPDATE payroll_periods SET status = $1, finalized_at = now() WHERE id = $2 AND tenant_id = $3
-  `, PeriodStatusFinalized, periodID, tenantID)
-	return err
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	var status string
+	if err := tx.QueryRow(ctx, `
+    SELECT status
+    FROM payroll_periods
+    WHERE tenant_id = $1 AND id = $2
+    FOR UPDATE
+  `, tenantID, periodID).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrPeriodNotFound
+		}
+		return err
+	}
+	if status != PeriodStatusReviewed {
+		return ErrFinalizeInvalidState
+	}
+
+	if _, err := tx.Exec(ctx, `
+    UPDATE payroll_periods
+    SET status = $1, finalized_at = now()
+    WHERE id = $2 AND tenant_id = $3
+  `, PeriodStatusFinalized, periodID, tenantID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+    INSERT INTO payslips (tenant_id, period_id, employee_id)
+    SELECT tenant_id, period_id, employee_id
+    FROM payroll_results
+    WHERE tenant_id = $1 AND period_id = $2
+    ON CONFLICT DO NOTHING
+  `, tenantID, periodID); err != nil {
+		return err
+	}
+
+	var payslipCount int
+	if err := tx.QueryRow(ctx, `
+    SELECT COUNT(1)
+    FROM payslips
+    WHERE tenant_id = $1 AND period_id = $2
+  `, tenantID, periodID).Scan(&payslipCount); err != nil {
+		return err
+	}
+	if payslipCount == 0 {
+		return ErrFinalizeNoResults
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func (s *Store) CreatePayslipsForPeriod(ctx context.Context, periodID string) error {

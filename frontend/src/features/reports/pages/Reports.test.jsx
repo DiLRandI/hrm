@@ -9,6 +9,7 @@ import { api } from '../../../services/apiClient.js';
 vi.mock('../../../services/apiClient.js', () => ({
   api: {
     get: vi.fn(),
+    getWithMeta: vi.fn(),
     download: vi.fn(),
   },
 }));
@@ -22,6 +23,7 @@ vi.mock('../../auth/auth.jsx', () => ({
 describe('Reports page', () => {
   beforeEach(() => {
     api.get.mockReset();
+    api.getWithMeta.mockReset();
     api.download.mockReset();
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:test');
     globalThis.URL.revokeObjectURL = vi.fn();
@@ -39,10 +41,14 @@ describe('Reports page', () => {
       if (path.startsWith('/reports/dashboard/hr')) {
         return Promise.resolve({ payrollStatus: 1 });
       }
-      if (path.startsWith('/reports/jobs')) {
-        return Promise.resolve([{ id: 'job-1', jobType: 'gdpr_retention', status: 'completed' }]);
+      if (path.startsWith('/reports/jobs/job-1')) {
+        return Promise.resolve({ id: 'job-1', details: { error: 'failed' } });
       }
       return Promise.resolve({});
+    });
+    api.getWithMeta.mockResolvedValue({
+      data: [{ id: 'job-1', jobType: 'gdpr_retention', status: 'failed', details: { error: 'failed' } }],
+      total: 1,
     });
     api.download.mockResolvedValue({ blob: new Blob(['a']), filename: 'report.csv' });
 
@@ -60,10 +66,17 @@ describe('Reports page', () => {
       expect(api.download).toHaveBeenCalledWith('/reports/dashboard/hr/export');
     });
 
-    const filter = screen.getByRole('combobox');
+    const [filter, statusFilter] = screen.getAllByRole('combobox');
     await userEvent.selectOptions(filter, 'gdpr_retention');
+    await userEvent.selectOptions(statusFilter, 'failed');
     await waitFor(() => {
-      expect(api.get).toHaveBeenCalledWith('/reports/jobs?jobType=gdpr_retention');
+      expect(api.getWithMeta).toHaveBeenCalledWith('/reports/jobs?jobType=gdpr_retention&status=failed');
+    });
+
+    const viewButton = await screen.findByRole('button', { name: /view/i });
+    await userEvent.click(viewButton);
+    await waitFor(() => {
+      expect(api.get).toHaveBeenCalledWith('/reports/jobs/job-1');
     });
   });
 });

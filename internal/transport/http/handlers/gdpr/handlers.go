@@ -32,6 +32,18 @@ type Handler struct {
 	Audit   *audit.Service
 }
 
+var retentionDataCategories = []string{
+	gdpr.DataCategoryAudit,
+	gdpr.DataCategoryLeave,
+	gdpr.DataCategoryPayroll,
+	gdpr.DataCategoryPerformance,
+	gdpr.DataCategoryGDPR,
+	gdpr.DataCategoryAccessLogs,
+	gdpr.DataCategoryNotifications,
+	gdpr.DataCategoryProfile,
+	gdpr.DataCategoryEmergency,
+}
+
 func NewHandler(service *gdpr.Service, perms middleware.PermissionStore, crypto *cryptoutil.Service, jobsSvc *jobs.Service, auditSvc *audit.Service) *Handler {
 	return &Handler{Service: service, Perms: perms, Crypto: crypto, Jobs: jobsSvc, Audit: auditSvc}
 }
@@ -84,7 +96,22 @@ func (h *Handler) handleCreateRetention(w http.ResponseWriter, r *http.Request) 
 
 	var payload gdpr.RetentionPolicy
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
+		return
+	}
+	payload.DataCategory = strings.ToLower(strings.TrimSpace(payload.DataCategory))
+	validator := shared.NewValidator()
+	validator.Required("dataCategory", payload.DataCategory, "is required")
+	validator.Enum("dataCategory", payload.DataCategory, retentionDataCategories, "must be one of the supported data categories")
+	if payload.RetentionDays <= 0 {
+		validator.Add("retentionDays", "must be greater than 0")
+	}
+	if payload.RetentionDays > 36500 {
+		validator.Add("retentionDays", "must be less than or equal to 36500")
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
 	}
 	id, err := h.Service.UpsertRetentionPolicy(r.Context(), user.TenantID, payload.DataCategory, payload.RetentionDays)
@@ -129,7 +156,17 @@ func (h *Handler) handleRunRetention(w http.ResponseWriter, r *http.Request) {
 		DataCategory string `json:"dataCategory"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
+		return
+	}
+	payload.DataCategory = strings.ToLower(strings.TrimSpace(payload.DataCategory))
+	validator := shared.NewValidator()
+	if payload.DataCategory != "" {
+		validator.Enum("dataCategory", payload.DataCategory, retentionDataCategories, "must be one of the supported data categories")
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
 	}
 
@@ -308,9 +345,12 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 		EmployeeID string `json:"employeeId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
 		return
 	}
+	payload.EmployeeID = strings.TrimSpace(payload.EmployeeID)
 	if payload.EmployeeID == "" {
 		if id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err != nil {
 			slog.Warn("dsar request employee lookup failed", "err", err)
@@ -319,7 +359,9 @@ func (h *Handler) handleRequestDSAR(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if payload.EmployeeID == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id required", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "employeeId", Reason: "is required"},
+		})
 		return
 	}
 	if user.RoleName != auth.RoleHR {
@@ -471,7 +513,17 @@ func (h *Handler) handleRequestAnonymization(w http.ResponseWriter, r *http.Requ
 		Reason     string `json:"reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
+		return
+	}
+	payload.EmployeeID = strings.TrimSpace(payload.EmployeeID)
+	payload.Reason = strings.TrimSpace(payload.Reason)
+	validator := shared.NewValidator()
+	validator.Required("employeeId", payload.EmployeeID, "is required")
+	validator.Required("reason", payload.Reason, "is required")
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
 	}
 

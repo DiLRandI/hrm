@@ -372,11 +372,21 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 	var payload resetPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", requestctx.GetRequestID(r.Context()))
+		shared.FailValidation(w, requestctx.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
 		return
 	}
-	if err := validateResetPassword(payload.NewPassword); err != nil {
-		api.Fail(w, http.StatusBadRequest, "weak_password", err.Error(), requestctx.GetRequestID(r.Context()))
+	payload.Token = strings.TrimSpace(payload.Token)
+	validator := shared.NewValidator()
+	validator.Required("token", payload.Token, "is required")
+	validator.Required("newPassword", payload.NewPassword, "is required")
+	if strings.TrimSpace(payload.NewPassword) != "" {
+		if err := validateResetPassword(payload.NewPassword); err != nil {
+			validator.Add("newPassword", err.Error())
+		}
+	}
+	if validator.Reject(w, requestctx.GetRequestID(r.Context())) {
 		return
 	}
 

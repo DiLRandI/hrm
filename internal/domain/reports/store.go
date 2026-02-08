@@ -2,6 +2,10 @@ package reports
 
 import (
 	"context"
+	"encoding/json"
+	"strconv"
+	"strings"
+	"time"
 
 	"hrm/internal/domain/leave"
 	"hrm/internal/platform/querier"
@@ -96,18 +100,16 @@ func (s *Store) ReviewCycles(ctx context.Context, tenantID string) (int, error) 
 	return reviewCycles, nil
 }
 
-func (s *Store) ListJobRuns(ctx context.Context, tenantID, jobType string, limit, offset int) ([]map[string]any, error) {
-	query := `
-    SELECT id, job_type, status, details_json, started_at, completed_at
-    FROM job_runs
-    WHERE tenant_id = $1
-  `
-	args := []any{tenantID}
-	if jobType != "" {
-		query += " AND job_type = $2"
-		args = append(args, jobType)
-	}
-	query += " ORDER BY started_at DESC LIMIT $3 OFFSET $4"
+type JobRunFilter struct {
+	JobType     string
+	Status      string
+	StartedFrom *time.Time
+	StartedTo   *time.Time
+}
+
+func (s *Store) ListJobRuns(ctx context.Context, tenantID string, filter JobRunFilter, limit, offset int) ([]map[string]any, error) {
+	query, args := buildJobRunsBaseQuery(tenantID, filter)
+	query += " ORDER BY started_at DESC LIMIT $" + strconv.Itoa(len(args)+1) + " OFFSET $" + strconv.Itoa(len(args)+2)
 	args = append(args, limit, offset)
 
 	rows, err := s.DB.Query(ctx, query, args...)
@@ -119,11 +121,13 @@ func (s *Store) ListJobRuns(ctx context.Context, tenantID, jobType string, limit
 	var runs []map[string]any
 	for rows.Next() {
 		var id, jobTypeVal, status string
-		var details any
-		var startedAt, completedAt any
-		if err := rows.Scan(&id, &jobTypeVal, &status, &details, &startedAt, &completedAt); err != nil {
+		var detailsRaw []byte
+		var startedAt time.Time
+		var completedAt *time.Time
+		if err := rows.Scan(&id, &jobTypeVal, &status, &detailsRaw, &startedAt, &completedAt); err != nil {
 			return nil, err
 		}
+		details := decodeDetails(detailsRaw)
 		runs = append(runs, map[string]any{
 			"id":          id,
 			"jobType":     jobTypeVal,
@@ -134,4 +138,79 @@ func (s *Store) ListJobRuns(ctx context.Context, tenantID, jobType string, limit
 		})
 	}
 	return runs, nil
+}
+
+func (s *Store) CountJobRuns(ctx context.Context, tenantID string, filter JobRunFilter) (int, error) {
+	query, args := buildJobRunsBaseQuery(tenantID, filter)
+	var total int
+	if err := s.DB.QueryRow(ctx, "SELECT COUNT(1) FROM ("+query+") job_runs", args...).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Store) JobRunByID(ctx context.Context, tenantID, runID string) (map[string]any, error) {
+	var (
+		id, jobTypeVal, status string
+		detailsRaw             []byte
+		startedAt              time.Time
+		completedAt            *time.Time
+	)
+	if err := s.DB.QueryRow(ctx, `
+    SELECT id, job_type, status, COALESCE(details_json, '{}'::jsonb), started_at, completed_at
+    FROM job_runs
+    WHERE tenant_id = $1 AND id = $2
+  `, tenantID, runID).Scan(&id, &jobTypeVal, &status, &detailsRaw, &startedAt, &completedAt); err != nil {
+		return nil, err
+	}
+
+	return map[string]any{
+		"id":          id,
+		"jobType":     jobTypeVal,
+		"status":      status,
+		"details":     decodeDetails(detailsRaw),
+		"startedAt":   startedAt,
+		"completedAt": completedAt,
+	}, nil
+}
+
+func buildJobRunsBaseQuery(tenantID string, filter JobRunFilter) (string, []any) {
+	query := `
+    SELECT id, job_type, status, COALESCE(details_json, '{}'::jsonb), started_at, completed_at
+    FROM job_runs
+    WHERE tenant_id = $1
+  `
+	args := []any{tenantID}
+
+	if value := strings.TrimSpace(filter.JobType); value != "" {
+		query += " AND job_type = $" + strconv.Itoa(len(args)+1)
+		args = append(args, value)
+	}
+	if value := strings.TrimSpace(filter.Status); value != "" {
+		query += " AND status = $" + strconv.Itoa(len(args)+1)
+		args = append(args, value)
+	}
+	if filter.StartedFrom != nil && !filter.StartedFrom.IsZero() {
+		query += " AND started_at >= $" + strconv.Itoa(len(args)+1)
+		args = append(args, *filter.StartedFrom)
+	}
+	if filter.StartedTo != nil && !filter.StartedTo.IsZero() {
+		query += " AND started_at <= $" + strconv.Itoa(len(args)+1)
+		args = append(args, *filter.StartedTo)
+	}
+
+	return query, args
+}
+
+func decodeDetails(raw []byte) map[string]any {
+	if len(raw) == 0 {
+		return map[string]any{}
+	}
+	details := map[string]any{}
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return map[string]any{
+			"raw": string(raw),
+		}
+	}
+	return details
 }

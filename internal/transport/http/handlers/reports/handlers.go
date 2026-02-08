@@ -2,12 +2,16 @@ package reportshandler
 
 import (
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"hrm/internal/domain/auth"
 	"hrm/internal/domain/reports"
@@ -34,6 +38,7 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/dashboard/manager/export", h.handleExportManagerDashboard)
 		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/dashboard/hr/export", h.handleExportHRDashboard)
 		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/jobs", h.handleJobRuns)
+		r.With(middleware.RequirePermission(auth.PermReportsRead, h.Perms)).Get("/jobs/{runID}", h.handleJobRunDetail)
 	})
 }
 
@@ -310,13 +315,94 @@ func (h *Handler) handleJobRuns(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	page := shared.ParsePagination(r, 100, 500)
-	jobType := r.URL.Query().Get("jobType")
 
-	runs, err := h.Service.JobRuns(r.Context(), user.TenantID, jobType, page.Limit, page.Offset)
+	page := shared.ParsePagination(r, 100, 500)
+	filter := reports.JobRunFilter{
+		JobType: strings.TrimSpace(r.URL.Query().Get("jobType")),
+		Status:  strings.TrimSpace(r.URL.Query().Get("status")),
+	}
+	filter.Status = strings.ToLower(filter.Status)
+
+	validator := shared.NewValidator()
+	if filter.Status != "" {
+		validator.Enum("status", filter.Status, []string{"running", "completed", "failed"}, "must be one of: running, completed, failed")
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("startedFrom")); raw != "" {
+		startedFrom, err := parseJobRunDate(raw, false)
+		if err != nil {
+			validator.Add("startedFrom", "must be YYYY-MM-DD or RFC3339 timestamp")
+		} else {
+			filter.StartedFrom = &startedFrom
+		}
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("startedTo")); raw != "" {
+		startedTo, err := parseJobRunDate(raw, true)
+		if err != nil {
+			validator.Add("startedTo", "must be YYYY-MM-DD or RFC3339 timestamp")
+		} else {
+			filter.StartedTo = &startedTo
+		}
+	}
+	if filter.StartedFrom != nil && filter.StartedTo != nil && filter.StartedTo.Before(*filter.StartedFrom) {
+		validator.Add("startedFrom", "must be on or before startedTo")
+		validator.Add("startedTo", "must be on or after startedFrom")
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
+		return
+	}
+
+	total, err := h.Service.CountJobRuns(r.Context(), user.TenantID, filter)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "job_runs_failed", "failed to count job runs", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	runs, err := h.Service.JobRuns(r.Context(), user.TenantID, filter, page.Limit, page.Offset)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "job_runs_failed", "failed to list job runs", middleware.GetRequestID(r.Context()))
 		return
 	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
 	api.Success(w, runs, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleJobRunDetail(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	runID := strings.TrimSpace(chi.URLParam(r, "runID"))
+	if runID == "" {
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "runID", Reason: "is required"},
+		})
+		return
+	}
+
+	run, err := h.Service.JobRunByID(r.Context(), user.TenantID, runID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		api.Fail(w, http.StatusNotFound, "not_found", "job run not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "job_run_failed", "failed to load job run", middleware.GetRequestID(r.Context()))
+		return
+	}
+	api.Success(w, run, middleware.GetRequestID(r.Context()))
+}
+
+func parseJobRunDate(raw string, endOfDay bool) (time.Time, error) {
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed, nil
+	}
+	parsed, err := shared.ParseDate(raw)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if endOfDay {
+		return parsed.Add(24*time.Hour - time.Nanosecond), nil
+	}
+	return parsed, nil
 }

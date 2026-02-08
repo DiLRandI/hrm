@@ -41,6 +41,8 @@ const (
 	maxLeaveRequestMultipartBytes = 8 * 1024 * 1024
 )
 
+var supportedAccrualPeriods = []string{"weekly", "monthly", "yearly"}
+
 func NewHandler(service *leave.Service, perms middleware.PermissionStore, notify *notifications.Service, auditSvc *audit.Service, jobsSvc *jobs.Service) *Handler {
 	return &Handler{Service: service, Perms: perms, Notify: notify, Audit: auditSvc, Jobs: jobsSvc}
 }
@@ -142,7 +144,27 @@ func (h *Handler) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 
 	var payload leave.LeavePolicy
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
+		return
+	}
+	payload.LeaveTypeID = strings.TrimSpace(payload.LeaveTypeID)
+	payload.AccrualPeriod = strings.ToLower(strings.TrimSpace(payload.AccrualPeriod))
+
+	validator := shared.NewValidator()
+	validator.Required("leaveTypeId", payload.LeaveTypeID, "is required")
+	validator.Enum("accrualPeriod", payload.AccrualPeriod, supportedAccrualPeriods, "must be one of: weekly, monthly, yearly")
+	if payload.AccrualRate < 0 {
+		validator.Add("accrualRate", "must be greater than or equal to 0")
+	}
+	if payload.Entitlement < 0 {
+		validator.Add("entitlement", "must be greater than or equal to 0")
+	}
+	if payload.CarryOver < 0 {
+		validator.Add("carryOverLimit", "must be greater than or equal to 0")
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
 	}
 
@@ -315,7 +337,23 @@ func (h *Handler) handleAdjustBalance(w http.ResponseWriter, r *http.Request) {
 
 	var payload adjustBalanceRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: "must be valid JSON"},
+		})
+		return
+	}
+	payload.EmployeeID = strings.TrimSpace(payload.EmployeeID)
+	payload.LeaveTypeID = strings.TrimSpace(payload.LeaveTypeID)
+	payload.Reason = strings.TrimSpace(payload.Reason)
+
+	validator := shared.NewValidator()
+	validator.Required("employeeId", payload.EmployeeID, "is required")
+	validator.Required("leaveTypeId", payload.LeaveTypeID, "is required")
+	validator.Required("reason", payload.Reason, "is required")
+	if payload.Amount == 0 {
+		validator.Add("amount", "must be non-zero")
+	}
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
 	}
 
@@ -561,13 +599,16 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 
 	payload, documents, err := decodeLeaveRequestPayload(r)
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", err.Error(), middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "payload", Reason: err.Error()},
+		})
 		return
 	}
-	if payload.LeaveTypeID == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "leave type required", middleware.GetRequestID(r.Context()))
-		return
-	}
+	payload.LeaveTypeID = strings.TrimSpace(payload.LeaveTypeID)
+	payload.EmployeeID = strings.TrimSpace(payload.EmployeeID)
+	payload.Reason = strings.TrimSpace(payload.Reason)
+	validator := shared.NewValidator()
+	validator.Required("leaveTypeId", payload.LeaveTypeID, "is required")
 
 	if user.RoleName != auth.RoleHR {
 		if id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err == nil {
@@ -576,31 +617,31 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("leave request self employee lookup failed", "err", err)
 		}
 	}
-	if strings.TrimSpace(payload.EmployeeID) == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id required", middleware.GetRequestID(r.Context()))
-		return
-	}
+	validator.Required("employeeId", payload.EmployeeID, "is required")
 
-	startDate, err := shared.ParseDate(payload.StartDate)
-	if err != nil || startDate.IsZero() {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid start date", middleware.GetRequestID(r.Context()))
-		return
+	startDate, startValid := validator.Date("startDate", payload.StartDate)
+	endDate, endValid := validator.Date("endDate", payload.EndDate)
+	if startValid && endValid {
+		validator.DateOrder("startDate", startDate, "endDate", endDate)
 	}
-	endDate, err := shared.ParseDate(payload.EndDate)
-	if err != nil || endDate.IsZero() {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid end date", middleware.GetRequestID(r.Context()))
+	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
 	}
 
 	days, err := leave.CalculateRequestDays(startDate, endDate, payload.StartHalf, payload.EndHalf)
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_dates", "invalid date or half-day range", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "startHalf", Reason: "invalid half-day combination for selected date range"},
+			{Field: "endHalf", Reason: "invalid half-day combination for selected date range"},
+		})
 		return
 	}
 
 	requiresDoc, err := h.Service.LeaveTypeRequiresDoc(r.Context(), user.TenantID, payload.LeaveTypeID)
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid leave type", middleware.GetRequestID(r.Context()))
+		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
+			{Field: "leaveTypeId", Reason: "must reference an existing leave type"},
+		})
 		return
 	}
 	if requiresDoc && len(documents) == 0 {

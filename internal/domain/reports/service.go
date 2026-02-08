@@ -50,6 +50,14 @@ func (s *Service) ReviewCycles(ctx context.Context, tenantID string) (int, error
 	return s.Store.ReviewCycles(ctx, tenantID)
 }
 
-func (s *Service) JobRuns(ctx context.Context, tenantID, jobType string, limit, offset int) ([]map[string]any, error) {
-	return s.Store.ListJobRuns(ctx, tenantID, jobType, limit, offset)
+func (s *Service) JobRuns(ctx context.Context, tenantID string, filter JobRunFilter, limit, offset int) ([]map[string]any, error) {
+	return s.Store.ListJobRuns(ctx, tenantID, filter, limit, offset)
+}
+
+func (s *Service) CountJobRuns(ctx context.Context, tenantID string, filter JobRunFilter) (int, error) {
+	return s.Store.CountJobRuns(ctx, tenantID, filter)
+}
+
+func (s *Service) JobRunByID(ctx context.Context, tenantID, runID string) (map[string]any, error) {
+	return s.Store.JobRunByID(ctx, tenantID, runID)
 }
