@@ -49,7 +49,10 @@ Base path: `/api/v1`
 - `POST /leave/balances/adjust`
 - `POST /leave/accrual/run`
 - `GET /leave/requests`
+- `GET /leave/requests/{id}`
 - `POST /leave/requests`
+- `POST /leave/requests/{id}/documents` (multipart `documents[]`)
+- `GET /leave/requests/{id}/documents/{documentId}/download`
 - `POST /leave/requests/{id}/approve`
 - `POST /leave/requests/{id}/reject`
 - `POST /leave/requests/{id}/cancel`
@@ -57,6 +60,8 @@ Base path: `/api/v1`
 - `GET /leave/calendar/export`
 - `GET /leave/reports/balances`
 - `GET /leave/reports/usage`
+
+`POST /leave/requests` supports `startHalf`/`endHalf` and can accept multipart form-data with uploaded `documents` for leave types that require supporting evidence.
 
 ## Payroll
 - `GET /payroll/schedules`

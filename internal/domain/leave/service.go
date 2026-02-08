@@ -38,6 +38,10 @@ func (s *Service) CreateType(ctx context.Context, tenantID string, payload Leave
 	return s.Store.CreateType(ctx, tenantID, payload)
 }
 
+func (s *Service) LeaveTypeRequiresDoc(ctx context.Context, tenantID, leaveTypeID string) (bool, error) {
+	return s.Store.LeaveTypeRequiresDoc(ctx, tenantID, leaveTypeID)
+}
+
 func (s *Service) ListPolicies(ctx context.Context, tenantID string) ([]LeavePolicy, error) {
 	return s.Store.ListPolicies(ctx, tenantID)
 }
@@ -97,6 +101,10 @@ func (s *Service) ListRequests(ctx context.Context, tenantID, roleName, employee
 	return s.Store.ListRequests(ctx, tenantID, roleName, employeeID, managerEmployeeID, limit, offset)
 }
 
+func (s *Service) GetRequest(ctx context.Context, tenantID, requestID string) (LeaveRequest, error) {
+	return s.Store.GetRequest(ctx, tenantID, requestID)
+}
+
 type CreateRequestResult struct {
 	ID            string
 	Status        string
@@ -104,14 +112,14 @@ type CreateRequestResult struct {
 	HRUserIDs     []string
 }
 
-func (s *Service) CreateRequest(ctx context.Context, tenantID, employeeID, leaveTypeID, reason string, startDate, endDate time.Time, days float64) (CreateRequestResult, error) {
+func (s *Service) CreateRequest(ctx context.Context, tenantID, employeeID, leaveTypeID, reason string, startDate, endDate time.Time, startHalf, endHalf bool, days float64) (CreateRequestResult, error) {
 	result := CreateRequestResult{Status: StatusPending}
 	requiresHR, err := s.Store.RequiresHRApproval(ctx, tenantID, leaveTypeID)
 	if err != nil {
 		requiresHR = false
 	}
 
-	if id, err := s.Store.CreateRequest(ctx, tenantID, employeeID, leaveTypeID, reason, startDate, endDate, days, StatusPending); err != nil {
+	if id, err := s.Store.CreateRequest(ctx, tenantID, employeeID, leaveTypeID, reason, startDate, endDate, startHalf, endHalf, days, StatusPending); err != nil {
 		return result, err
 	} else {
 		result.ID = id
@@ -148,6 +156,14 @@ func (s *Service) CreateRequest(ctx context.Context, tenantID, employeeID, leave
 	}
 
 	return result, nil
+}
+
+func (s *Service) CreateRequestDocument(ctx context.Context, tenantID, requestID string, payload LeaveRequestDocumentUpload, uploadedBy string) (LeaveRequestDocument, error) {
+	return s.Store.CreateRequestDocument(ctx, tenantID, requestID, payload, uploadedBy)
+}
+
+func (s *Service) RequestDocumentData(ctx context.Context, tenantID, requestID, documentID string) (LeaveRequestDocument, []byte, error) {
+	return s.Store.RequestDocumentData(ctx, tenantID, requestID, documentID)
 }
 
 type ApprovalResult struct {

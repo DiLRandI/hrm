@@ -40,12 +40,14 @@ export default function LeaveTypesCard({ types, form, onChange, onSubmit, disabl
           <span>Name</span>
           <span>Code</span>
           <span>Paid</span>
+          <span>Doc required</span>
         </div>
         {types.map((type) => (
           <div key={type.id} className="table-row">
             <span>{type.name}</span>
             <span>{type.code}</span>
             <span>{type.isPaid ? 'Yes' : 'No'}</span>
+            <span>{type.requiresDoc ? 'Yes' : 'No'}</span>
           </div>
         ))}
       </div>

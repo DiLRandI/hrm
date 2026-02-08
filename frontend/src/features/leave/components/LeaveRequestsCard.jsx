@@ -7,12 +7,15 @@ export default function LeaveRequestsCard({
   requests,
   requestForm,
   onFormChange,
+  onDocumentsChange,
   onSubmit,
   isManager,
   isHR,
   onApprove,
   onReject,
   onCancel,
+  onDownloadDocument,
+  requiresDocument,
   disabled,
 }) {
   return (
@@ -41,6 +44,28 @@ export default function LeaveRequestsCard({
           value={requestForm.endDate}
           onChange={(e) => onFormChange('endDate', e.target.value)}
         />
+        <select
+          aria-label="Start day duration"
+          value={requestForm.startHalf ? 'half' : 'full'}
+          onChange={(e) => onFormChange('startHalf', e.target.value === 'half')}
+        >
+          <option value="full">Start full day</option>
+          <option value="half">Start half day</option>
+        </select>
+        <select
+          aria-label="End day duration"
+          value={requestForm.endHalf ? 'half' : 'full'}
+          onChange={(e) => onFormChange('endHalf', e.target.value === 'half')}
+        >
+          <option value="full">End full day</option>
+          <option value="half">End half day</option>
+        </select>
+        <input
+          aria-label="Supporting documents"
+          type="file"
+          multiple
+          onChange={(e) => onDocumentsChange(Array.from(e.target.files || []))}
+        />
         <input
           aria-label="Reason"
           placeholder="Reason"
@@ -49,12 +74,17 @@ export default function LeaveRequestsCard({
         />
         <button type="submit" disabled={disabled}>Submit request</button>
       </form>
+      {requiresDocument && (
+        <small className="hint">Supporting document is required for this leave type.</small>
+      )}
 
       <div className="table">
         <div className="table-row header">
           <span>Employee</span>
           <span>Type</span>
           <span>Dates</span>
+          <span>Days</span>
+          <span>Documents</span>
           <span>Status</span>
           <span>Actions</span>
         </div>
@@ -62,7 +92,18 @@ export default function LeaveRequestsCard({
           <div key={req.id} className="table-row">
             <span>{req.employeeId}</span>
             <span>{typeLookup[req.leaveTypeId] || req.leaveTypeId}</span>
-            <span>{req.startDate?.slice(0, 10)} → {req.endDate?.slice(0, 10)}</span>
+            <span>
+              {req.startDate?.slice(0, 10)} {req.startHalf ? '(half)' : '(full)'} → {req.endDate?.slice(0, 10)}{' '}
+              {req.endHalf ? '(half)' : '(full)'}
+            </span>
+            <span>{req.days}</span>
+            <span className="row-actions">
+              {(req.documents || []).map((doc) => (
+                <button key={doc.id} type="button" className="ghost" onClick={() => onDownloadDocument(req.id, doc.id)}>
+                  {doc.fileName}
+                </button>
+              ))}
+            </span>
             <span>{req.status}</span>
             <span className="row-actions">
               {(isManager || isHR) && req.status === LEAVE_STATUS_PENDING && (

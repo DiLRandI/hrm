@@ -10,6 +10,7 @@ import (
 type StoreAPI interface {
 	ListTypes(ctx context.Context, tenantID string) ([]LeaveType, error)
 	CreateType(ctx context.Context, tenantID string, payload LeaveType) (string, error)
+	LeaveTypeRequiresDoc(ctx context.Context, tenantID, leaveTypeID string) (bool, error)
 	ListPolicies(ctx context.Context, tenantID string) ([]LeavePolicy, error)
 	CreatePolicy(ctx context.Context, tenantID string, payload LeavePolicy) (string, error)
 	ListHolidays(ctx context.Context, tenantID string) ([]map[string]any, error)
@@ -18,8 +19,12 @@ type StoreAPI interface {
 	ListBalances(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error)
 	AdjustBalance(ctx context.Context, tenantID, employeeID, leaveTypeID, reason, userID string, amount float64) error
 	ListRequests(ctx context.Context, tenantID, roleName, employeeID, managerEmployeeID string, limit, offset int) (RequestListResult, error)
+	GetRequest(ctx context.Context, tenantID, requestID string) (LeaveRequest, error)
 	RequiresHRApproval(ctx context.Context, tenantID, leaveTypeID string) (bool, error)
-	CreateRequest(ctx context.Context, tenantID, employeeID, leaveTypeID, reason string, startDate, endDate time.Time, days float64, status string) (string, error)
+	CreateRequest(ctx context.Context, tenantID, employeeID, leaveTypeID, reason string, startDate, endDate time.Time, startHalf, endHalf bool, days float64, status string) (string, error)
+	CreateRequestDocument(ctx context.Context, tenantID, requestID string, payload LeaveRequestDocumentUpload, uploadedBy string) (LeaveRequestDocument, error)
+	ListRequestDocuments(ctx context.Context, tenantID string, requestIDs []string) (map[string][]LeaveRequestDocument, error)
+	RequestDocumentData(ctx context.Context, tenantID, requestID, documentID string) (LeaveRequestDocument, []byte, error)
 	AddPendingBalance(ctx context.Context, tenantID, employeeID, leaveTypeID string, days float64) error
 	ManagerUserIDForEmployee(ctx context.Context, tenantID, employeeID string) (string, error)
 	InsertApproval(ctx context.Context, tenantID, requestID, approverID, status string) error

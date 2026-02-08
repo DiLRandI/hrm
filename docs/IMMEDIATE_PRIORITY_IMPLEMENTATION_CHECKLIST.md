@@ -191,14 +191,16 @@ Status (2026-02-08): Complete (implementation and integration tests in place)
 ---
 
 ## E. Leave workflow completeness
+Status (2026-02-08): Complete (API + UI + tests delivered)
+
 ### E1. Checklist
-- [ ] Support half-day requests (`startHalf`, `endHalf`) in API + UI.
-- [ ] Update day calculation logic for half-day combinations.
-- [ ] Enforce supporting documents when leave type requires docs.
-- [ ] Add request-document upload + metadata persistence.
-- [ ] Include document/half-day state in leave request list/detail responses.
-- [ ] Add validation for conflicting/invalid half-day combinations.
-- [ ] Add tests for half-day math and document-required policy enforcement.
+- [x] Support half-day requests (`startHalf`, `endHalf`) in API + UI.
+- [x] Update day calculation logic for half-day combinations.
+- [x] Enforce supporting documents when leave type requires docs.
+- [x] Add request-document upload + metadata persistence.
+- [x] Include document/half-day state in leave request list/detail responses.
+- [x] Add validation for conflicting/invalid half-day combinations.
+- [x] Add tests for half-day math and document-required policy enforcement.
 
 ### E2. Implementation guidance
 - Primary files:
@@ -225,10 +227,11 @@ Status (2026-02-08): Complete (implementation and integration tests in place)
 - UI allows users/managers/HR to submit and review half-day/doc-based requests.
 
 ### E4. Test checklist
-- [ ] Unit: day calculation with full-day/half-day permutations.
-- [ ] Integration: create request with/without required document.
-- [ ] Integration: approval/rejection balance transitions with half-day.
-- [ ] Frontend tests for request form behavior.
+- [x] Unit: day calculation with full-day/half-day permutations.
+- [x] Integration: create request with/without required document.
+- [x] Integration: approval/rejection balance transitions with half-day.
+- [x] Frontend tests for request form behavior.
+- Note: backend leave integration tests are DB-backed and run when `TEST_DATABASE_URL` is configured.
 
 ---
 

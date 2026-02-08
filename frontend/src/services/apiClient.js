@@ -118,6 +118,7 @@ export const api = {
   get: (path, options) => request(path, options),
   getWithMeta: (path, options) => requestWithMeta(path, options),
   post: (path, body, options) => request(path, { method: 'POST', body: JSON.stringify(body), ...options }),
+  postForm: (path, formData, options) => request(path, { method: 'POST', body: formData, ...options }),
   put: (path, body, options) => request(path, { method: 'PUT', body: JSON.stringify(body), ...options }),
   del: (path, options) => request(path, { method: 'DELETE', ...options }),
   postRaw: (path, body, contentType, options) => requestRaw(path, { method: 'POST', body, contentType, ...options }),

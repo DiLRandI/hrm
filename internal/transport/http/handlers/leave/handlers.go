@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -32,6 +35,12 @@ type Handler struct {
 	Jobs    *jobs.Service
 }
 
+const (
+	maxLeaveRequestDocuments      = 5
+	maxLeaveRequestDocumentBytes  = 2 * 1024 * 1024
+	maxLeaveRequestMultipartBytes = 8 * 1024 * 1024
+)
+
 func NewHandler(service *leave.Service, perms middleware.PermissionStore, notify *notifications.Service, auditSvc *audit.Service, jobsSvc *jobs.Service) *Handler {
 	return &Handler{Service: service, Perms: perms, Notify: notify, Audit: auditSvc, Jobs: jobsSvc}
 }
@@ -49,7 +58,10 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/balances/adjust", h.handleAdjustBalance)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/accrual/run", h.handleRunAccruals)
 		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/requests", h.handleListRequests)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/requests/{requestID}", h.handleGetRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests", h.handleCreateRequest)
+		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests/{requestID}/documents", h.handleUploadRequestDocument)
+		r.With(middleware.RequirePermission(auth.PermLeaveRead, h.Perms)).Get("/requests/{requestID}/documents/{documentID}/download", h.handleDownloadRequestDocument)
 		r.With(middleware.RequirePermission(auth.PermLeaveApprove, h.Perms)).Post("/requests/{requestID}/approve", h.handleApproveRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveApprove, h.Perms)).Post("/requests/{requestID}/reject", h.handleRejectRequest)
 		r.With(middleware.RequirePermission(auth.PermLeaveWrite, h.Perms)).Post("/requests/{requestID}/cancel", h.handleCancelRequest)
@@ -394,12 +406,150 @@ func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
 	api.Success(w, result.Requests, middleware.GetRequestID(r.Context()))
 }
 
+func (h *Handler) handleGetRequest(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	requestID := chi.URLParam(r, "requestID")
+	req, err := h.Service.GetRequest(r.Context(), user.TenantID, requestID)
+	if err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "leave request not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	allowed, err := h.canAccessRequest(r.Context(), user, req.EmployeeID)
+	if err != nil {
+		slog.Warn("leave request access check failed", "requestId", requestID, "err", err)
+	}
+	if !allowed {
+		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	api.Success(w, req, middleware.GetRequestID(r.Context()))
+}
+
 type leaveRequestPayload struct {
 	EmployeeID  string `json:"employeeId"`
 	LeaveTypeID string `json:"leaveTypeId"`
 	StartDate   string `json:"startDate"`
 	EndDate     string `json:"endDate"`
+	StartHalf   bool   `json:"startHalf"`
+	EndHalf     bool   `json:"endHalf"`
 	Reason      string `json:"reason"`
+}
+
+func decodeLeaveRequestPayload(r *http.Request) (leaveRequestPayload, []leave.LeaveRequestDocumentUpload, error) {
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		if err := r.ParseMultipartForm(maxLeaveRequestMultipartBytes); err != nil {
+			return leaveRequestPayload{}, nil, fmt.Errorf("invalid multipart payload")
+		}
+
+		startHalf, err := parseOptionalBool(r.FormValue("startHalf"))
+		if err != nil {
+			return leaveRequestPayload{}, nil, fmt.Errorf("invalid startHalf value")
+		}
+		endHalf, err := parseOptionalBool(r.FormValue("endHalf"))
+		if err != nil {
+			return leaveRequestPayload{}, nil, fmt.Errorf("invalid endHalf value")
+		}
+
+		documents, err := parseMultipartDocuments(r.MultipartForm.File["documents"])
+		if err != nil {
+			return leaveRequestPayload{}, nil, err
+		}
+
+		return leaveRequestPayload{
+			EmployeeID:  strings.TrimSpace(r.FormValue("employeeId")),
+			LeaveTypeID: strings.TrimSpace(r.FormValue("leaveTypeId")),
+			StartDate:   strings.TrimSpace(r.FormValue("startDate")),
+			EndDate:     strings.TrimSpace(r.FormValue("endDate")),
+			StartHalf:   startHalf,
+			EndHalf:     endHalf,
+			Reason:      strings.TrimSpace(r.FormValue("reason")),
+		}, documents, nil
+	}
+
+	var payload leaveRequestPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		return leaveRequestPayload{}, nil, err
+	}
+	return payload, nil, nil
+}
+
+func parseMultipartDocuments(files []*multipart.FileHeader) ([]leave.LeaveRequestDocumentUpload, error) {
+	if len(files) > maxLeaveRequestDocuments {
+		return nil, fmt.Errorf("too many documents")
+	}
+
+	documents := make([]leave.LeaveRequestDocumentUpload, 0, len(files))
+	for _, header := range files {
+		if header == nil {
+			continue
+		}
+		if header.Size > maxLeaveRequestDocumentBytes {
+			return nil, fmt.Errorf("document exceeds maximum size")
+		}
+
+		file, err := header.Open()
+		if err != nil {
+			return nil, fmt.Errorf("failed to open document")
+		}
+		content, err := io.ReadAll(io.LimitReader(file, maxLeaveRequestDocumentBytes+1))
+		closeErr := file.Close()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read document")
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("failed to close document")
+		}
+		if int64(len(content)) > maxLeaveRequestDocumentBytes {
+			return nil, fmt.Errorf("document exceeds maximum size")
+		}
+		if len(content) == 0 {
+			return nil, fmt.Errorf("empty document is not allowed")
+		}
+
+		fileName := sanitizeUploadedFileName(header.Filename)
+		contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
+		if contentType == "" {
+			contentType = http.DetectContentType(content)
+		}
+
+		documents = append(documents, leave.LeaveRequestDocumentUpload{
+			FileName:    fileName,
+			ContentType: contentType,
+			FileSize:    int64(len(content)),
+			Data:        content,
+		})
+	}
+
+	return documents, nil
+}
+
+func parseOptionalBool(raw string) (bool, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return false, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, err
+	}
+	return parsed, nil
+}
+
+func sanitizeUploadedFileName(name string) string {
+	cleaned := strings.TrimSpace(filepath.Base(name))
+	cleaned = strings.ReplaceAll(cleaned, "\x00", "")
+	if cleaned == "" {
+		return "document.bin"
+	}
+	return cleaned
 }
 
 func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
@@ -409,9 +559,9 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload leaveRequestPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
+	payload, documents, err := decodeLeaveRequestPayload(r)
+	if err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", err.Error(), middleware.GetRequestID(r.Context()))
 		return
 	}
 	if payload.LeaveTypeID == "" {
@@ -426,6 +576,10 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("leave request self employee lookup failed", "err", err)
 		}
 	}
+	if strings.TrimSpace(payload.EmployeeID) == "" {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id required", middleware.GetRequestID(r.Context()))
+		return
+	}
 
 	startDate, err := shared.ParseDate(payload.StartDate)
 	if err != nil || startDate.IsZero() {
@@ -438,19 +592,49 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	days, err := leave.CalculateDays(startDate, endDate)
+	days, err := leave.CalculateRequestDays(startDate, endDate, payload.StartHalf, payload.EndHalf)
 	if err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_dates", "invalid date range", middleware.GetRequestID(r.Context()))
+		api.Fail(w, http.StatusBadRequest, "invalid_dates", "invalid date or half-day range", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	result, err := h.Service.CreateRequest(r.Context(), user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.Reason, startDate, endDate, days)
+	requiresDoc, err := h.Service.LeaveTypeRequiresDoc(r.Context(), user.TenantID, payload.LeaveTypeID)
+	if err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid leave type", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if requiresDoc && len(documents) == 0 {
+		api.Fail(w, http.StatusBadRequest, "document_required", "supporting document is required for this leave type", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	result, err := h.Service.CreateRequest(r.Context(), user.TenantID, payload.EmployeeID, payload.LeaveTypeID, payload.Reason, startDate, endDate, payload.StartHalf, payload.EndHalf, days)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "leave_request_failed", "failed to create request", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "leave.request.create", "leave_request", result.ID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
+	createdDocs := make([]leave.LeaveRequestDocument, 0, len(documents))
+	for _, doc := range documents {
+		createdDoc, err := h.Service.CreateRequestDocument(r.Context(), user.TenantID, result.ID, doc, user.UserID)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "leave_request_failed", "failed to store supporting document", middleware.GetRequestID(r.Context()))
+			return
+		}
+		createdDocs = append(createdDocs, createdDoc)
+	}
+
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "leave.request.create", "leave_request", result.ID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{
+		"employeeId":    payload.EmployeeID,
+		"leaveTypeId":   payload.LeaveTypeID,
+		"startDate":     payload.StartDate,
+		"endDate":       payload.EndDate,
+		"startHalf":     payload.StartHalf,
+		"endHalf":       payload.EndHalf,
+		"reason":        payload.Reason,
+		"days":          days,
+		"documentCount": len(createdDocs),
+	}); err != nil {
 		slog.Warn("audit leave.request.create failed", "err", err)
 	}
 	if result.ManagerUserID != "" {
@@ -468,7 +652,144 @@ func (h *Handler) handleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	api.Created(w, map[string]string{"id": result.ID, "status": result.Status}, middleware.GetRequestID(r.Context()))
+	api.Created(w, map[string]any{
+		"id":          result.ID,
+		"status":      result.Status,
+		"days":        days,
+		"startHalf":   payload.StartHalf,
+		"endHalf":     payload.EndHalf,
+		"documents":   createdDocs,
+		"requiresDoc": requiresDoc,
+	}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleUploadRequestDocument(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	requestID := chi.URLParam(r, "requestID")
+	req, err := h.Service.GetRequest(r.Context(), user.TenantID, requestID)
+	if err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "leave request not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	allowed, err := h.canAccessRequest(r.Context(), user, req.EmployeeID)
+	if err != nil {
+		slog.Warn("leave request document access check failed", "requestId", requestID, "err", err)
+	}
+	if !allowed {
+		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	if err := r.ParseMultipartForm(maxLeaveRequestMultipartBytes); err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid multipart payload", middleware.GetRequestID(r.Context()))
+		return
+	}
+	documents, err := parseMultipartDocuments(r.MultipartForm.File["documents"])
+	if err != nil {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", err.Error(), middleware.GetRequestID(r.Context()))
+		return
+	}
+	if len(documents) == 0 {
+		api.Fail(w, http.StatusBadRequest, "invalid_payload", "at least one document is required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	createdDocs := make([]leave.LeaveRequestDocument, 0, len(documents))
+	for _, doc := range documents {
+		createdDoc, err := h.Service.CreateRequestDocument(r.Context(), user.TenantID, requestID, doc, user.UserID)
+		if err != nil {
+			api.Fail(w, http.StatusInternalServerError, "leave_document_upload_failed", "failed to upload document", middleware.GetRequestID(r.Context()))
+			return
+		}
+		createdDocs = append(createdDocs, createdDoc)
+	}
+
+	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "leave.request.document.upload", "leave_request", requestID, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, map[string]any{
+		"documentCount": len(createdDocs),
+	}); err != nil {
+		slog.Warn("audit leave.request.document.upload failed", "err", err)
+	}
+
+	api.Created(w, map[string]any{"documents": createdDocs}, middleware.GetRequestID(r.Context()))
+}
+
+func (h *Handler) handleDownloadRequestDocument(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
+		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	requestID := chi.URLParam(r, "requestID")
+	documentID := chi.URLParam(r, "documentID")
+	req, err := h.Service.GetRequest(r.Context(), user.TenantID, requestID)
+	if err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "leave request not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	allowed, err := h.canAccessRequest(r.Context(), user, req.EmployeeID)
+	if err != nil {
+		slog.Warn("leave request document access check failed", "requestId", requestID, "err", err)
+	}
+	if !allowed {
+		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	document, data, err := h.Service.RequestDocumentData(r.Context(), user.TenantID, requestID, documentID)
+	if err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "document not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	contentType := document.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", document.FileName))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(data); err != nil {
+		slog.Warn("leave document download write failed", "requestId", requestID, "documentId", documentID, "err", err)
+	}
+}
+
+func (h *Handler) canAccessRequest(ctx context.Context, user auth.UserContext, requestEmployeeID string) (bool, error) {
+	if user.RoleName == auth.RoleHR {
+		return true, nil
+	}
+
+	selfEmployeeID, err := h.Service.EmployeeIDByUserID(ctx, user.TenantID, user.UserID)
+	if err != nil {
+		return false, err
+	}
+	if selfEmployeeID == "" {
+		return false, nil
+	}
+
+	if user.RoleName == auth.RoleEmployee {
+		return selfEmployeeID == requestEmployeeID, nil
+	}
+	if user.RoleName == auth.RoleManager {
+		if selfEmployeeID == requestEmployeeID {
+			return true, nil
+		}
+		allowed, err := h.Service.IsManagerOf(ctx, user.TenantID, selfEmployeeID, requestEmployeeID)
+		if err != nil {
+			return false, err
+		}
+		return allowed, nil
+	}
+
+	return false, nil
 }
 
 func (h *Handler) handleApproveRequest(w http.ResponseWriter, r *http.Request) {

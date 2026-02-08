@@ -3,6 +3,7 @@ package leave
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"hrm/internal/domain/auth"
@@ -41,6 +42,18 @@ func (s *Store) CreateType(ctx context.Context, tenantID string, payload LeaveTy
 		return "", err
 	}
 	return id, nil
+}
+
+func (s *Store) LeaveTypeRequiresDoc(ctx context.Context, tenantID, leaveTypeID string) (bool, error) {
+	var requiresDoc bool
+	if err := s.DB.QueryRow(ctx, `
+    SELECT requires_doc
+    FROM leave_types
+    WHERE tenant_id = $1 AND id = $2
+  `, tenantID, leaveTypeID).Scan(&requiresDoc); err != nil {
+		return false, err
+	}
+	return requiresDoc, nil
 }
 
 func (s *Store) ListPolicies(ctx context.Context, tenantID string) ([]LeavePolicy, error) {
@@ -175,7 +188,7 @@ func (s *Store) AdjustBalance(ctx context.Context, tenantID, employeeID, leaveTy
 
 func (s *Store) ListRequests(ctx context.Context, tenantID, roleName, employeeID, managerEmployeeID string, limit, offset int) (RequestListResult, error) {
 	query := `
-    SELECT id, employee_id, leave_type_id, start_date, end_date, days, reason, status, created_at
+    SELECT id, employee_id, leave_type_id, start_date, end_date, start_half, end_half, days, reason, status, created_at
     FROM leave_requests
     WHERE tenant_id = $1
   `
@@ -224,12 +237,56 @@ func (s *Store) ListRequests(ctx context.Context, tenantID, roleName, employeeID
 	var requests []LeaveRequest
 	for rows.Next() {
 		var req LeaveRequest
-		if err := rows.Scan(&req.ID, &req.EmployeeID, &req.LeaveTypeID, &req.StartDate, &req.EndDate, &req.Days, &req.Reason, &req.Status, &req.CreatedAt); err != nil {
+		if err := rows.Scan(&req.ID, &req.EmployeeID, &req.LeaveTypeID, &req.StartDate, &req.EndDate, &req.StartHalf, &req.EndHalf, &req.Days, &req.Reason, &req.Status, &req.CreatedAt); err != nil {
 			return RequestListResult{}, err
 		}
 		requests = append(requests, req)
 	}
+
+	requestIDs := make([]string, 0, len(requests))
+	for _, req := range requests {
+		requestIDs = append(requestIDs, req.ID)
+	}
+	if len(requestIDs) > 0 {
+		docsByRequest, err := s.ListRequestDocuments(ctx, tenantID, requestIDs)
+		if err != nil {
+			return RequestListResult{}, err
+		}
+		for i := range requests {
+			requests[i].Documents = docsByRequest[requests[i].ID]
+		}
+	}
 	return RequestListResult{Requests: requests, Total: total}, nil
+}
+
+func (s *Store) GetRequest(ctx context.Context, tenantID, requestID string) (LeaveRequest, error) {
+	var req LeaveRequest
+	if err := s.DB.QueryRow(ctx, `
+    SELECT id, employee_id, leave_type_id, start_date, end_date, start_half, end_half, days, reason, status, created_at
+    FROM leave_requests
+    WHERE tenant_id = $1 AND id = $2
+  `, tenantID, requestID).Scan(
+		&req.ID,
+		&req.EmployeeID,
+		&req.LeaveTypeID,
+		&req.StartDate,
+		&req.EndDate,
+		&req.StartHalf,
+		&req.EndHalf,
+		&req.Days,
+		&req.Reason,
+		&req.Status,
+		&req.CreatedAt,
+	); err != nil {
+		return LeaveRequest{}, err
+	}
+
+	docsByRequest, err := s.ListRequestDocuments(ctx, tenantID, []string{requestID})
+	if err != nil {
+		return LeaveRequest{}, err
+	}
+	req.Documents = docsByRequest[requestID]
+	return req, nil
 }
 
 func (s *Store) RequiresHRApproval(ctx context.Context, tenantID, leaveTypeID string) (bool, error) {
@@ -245,16 +302,95 @@ func (s *Store) RequiresHRApproval(ctx context.Context, tenantID, leaveTypeID st
 	return requiresHR, nil
 }
 
-func (s *Store) CreateRequest(ctx context.Context, tenantID, employeeID, leaveTypeID, reason string, startDate, endDate time.Time, days float64, status string) (string, error) {
+func (s *Store) CreateRequest(ctx context.Context, tenantID, employeeID, leaveTypeID, reason string, startDate, endDate time.Time, startHalf, endHalf bool, days float64, status string) (string, error) {
 	var id string
 	if err := s.DB.QueryRow(ctx, `
-    INSERT INTO leave_requests (tenant_id, employee_id, leave_type_id, start_date, end_date, days, reason, status)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    INSERT INTO leave_requests (tenant_id, employee_id, leave_type_id, start_date, end_date, start_half, end_half, days, reason, status)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
     RETURNING id
-  `, tenantID, employeeID, leaveTypeID, startDate, endDate, days, reason, status).Scan(&id); err != nil {
+  `, tenantID, employeeID, leaveTypeID, startDate, endDate, startHalf, endHalf, days, reason, status).Scan(&id); err != nil {
 		return "", err
 	}
 	return id, nil
+}
+
+func (s *Store) CreateRequestDocument(ctx context.Context, tenantID, requestID string, payload LeaveRequestDocumentUpload, uploadedBy string) (LeaveRequestDocument, error) {
+	var out LeaveRequestDocument
+	if err := s.DB.QueryRow(ctx, `
+    INSERT INTO leave_request_documents (tenant_id, leave_request_id, file_name, content_type, file_size, file_data, uploaded_by)
+    VALUES ($1,$2,$3,$4,$5,$6,$7)
+    RETURNING id, leave_request_id, file_name, content_type, file_size, uploaded_by, created_at
+  `, tenantID, requestID, payload.FileName, payload.ContentType, payload.FileSize, payload.Data, uploadedBy).Scan(
+		&out.ID,
+		&out.LeaveRequestID,
+		&out.FileName,
+		&out.ContentType,
+		&out.FileSize,
+		&out.UploadedBy,
+		&out.CreatedAt,
+	); err != nil {
+		return LeaveRequestDocument{}, err
+	}
+	return out, nil
+}
+
+func (s *Store) ListRequestDocuments(ctx context.Context, tenantID string, requestIDs []string) (map[string][]LeaveRequestDocument, error) {
+	out := map[string][]LeaveRequestDocument{}
+	if len(requestIDs) == 0 {
+		return out, nil
+	}
+
+	placeholders := make([]string, 0, len(requestIDs))
+	args := make([]any, 0, len(requestIDs)+1)
+	args = append(args, tenantID)
+	for idx, requestID := range requestIDs {
+		placeholders = append(placeholders, fmt.Sprintf("$%d", idx+2))
+		args = append(args, requestID)
+	}
+
+	query := fmt.Sprintf(`
+    SELECT id, leave_request_id, file_name, content_type, file_size, uploaded_by, created_at
+    FROM leave_request_documents
+    WHERE tenant_id = $1 AND leave_request_id IN (%s)
+    ORDER BY created_at ASC
+  `, strings.Join(placeholders, ","))
+
+	rows, err := s.DB.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var doc LeaveRequestDocument
+		if err := rows.Scan(&doc.ID, &doc.LeaveRequestID, &doc.FileName, &doc.ContentType, &doc.FileSize, &doc.UploadedBy, &doc.CreatedAt); err != nil {
+			return nil, err
+		}
+		out[doc.LeaveRequestID] = append(out[doc.LeaveRequestID], doc)
+	}
+	return out, nil
+}
+
+func (s *Store) RequestDocumentData(ctx context.Context, tenantID, requestID, documentID string) (LeaveRequestDocument, []byte, error) {
+	var doc LeaveRequestDocument
+	var data []byte
+	if err := s.DB.QueryRow(ctx, `
+    SELECT id, leave_request_id, file_name, content_type, file_size, uploaded_by, created_at, file_data
+    FROM leave_request_documents
+    WHERE tenant_id = $1 AND leave_request_id = $2 AND id = $3
+  `, tenantID, requestID, documentID).Scan(
+		&doc.ID,
+		&doc.LeaveRequestID,
+		&doc.FileName,
+		&doc.ContentType,
+		&doc.FileSize,
+		&doc.UploadedBy,
+		&doc.CreatedAt,
+		&data,
+	); err != nil {
+		return LeaveRequestDocument{}, nil, err
+	}
+	return doc, data, nil
 }
 
 func (s *Store) AddPendingBalance(ctx context.Context, tenantID, employeeID, leaveTypeID string, days float64) error {

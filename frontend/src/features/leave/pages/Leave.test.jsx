@@ -11,6 +11,7 @@ vi.mock('../../../services/apiClient.js', () => ({
     get: vi.fn(),
     getWithMeta: vi.fn(),
     post: vi.fn(),
+    postForm: vi.fn(),
     del: vi.fn(),
     download: vi.fn(),
   },
@@ -28,6 +29,7 @@ describe('Leave page', () => {
     api.get.mockReset();
     api.getWithMeta.mockReset();
     api.post.mockReset();
+    api.postForm.mockReset();
     api.del.mockReset();
   });
 
@@ -39,7 +41,7 @@ describe('Leave page', () => {
       return Promise.resolve([]);
     });
     api.getWithMeta.mockResolvedValue({ data: [], total: 0 });
-    api.post.mockResolvedValue({ id: 'req-1' });
+    api.postForm.mockResolvedValue({ id: 'req-1' });
 
     const { container } = render(
       <MemoryRouter initialEntries={['/leave/requests']}>
@@ -49,7 +51,7 @@ describe('Leave page', () => {
       </MemoryRouter>,
     );
 
-    const leaveTypeSelect = await screen.findByRole('combobox');
+    const leaveTypeSelect = await screen.findByRole('combobox', { name: /leave type/i });
     await userEvent.selectOptions(leaveTypeSelect, 't1');
     const dateInputs = container.querySelectorAll('input[type="date"]');
     await userEvent.type(dateInputs[0], '2026-01-10');
@@ -60,11 +62,48 @@ describe('Leave page', () => {
     await userEvent.click(submit);
 
     await waitFor(() => {
-      expect(api.post).toHaveBeenCalledWith('/leave/requests', expect.objectContaining({
-        employeeId: 'emp-1',
-        leaveTypeId: 't1',
-        reason: 'Family trip',
-      }));
+      expect(api.postForm).toHaveBeenCalled();
+    });
+
+    const [path, formData] = api.postForm.mock.calls[0];
+    expect(path).toBe('/leave/requests');
+    expect(formData).toBeInstanceOf(FormData);
+    expect(formData.get('employeeId')).toBe('emp-1');
+    expect(formData.get('leaveTypeId')).toBe('t1');
+    expect(formData.get('startDate')).toBe('2026-01-10');
+    expect(formData.get('endDate')).toBe('2026-01-12');
+    expect(formData.get('reason')).toBe('Family trip');
+  });
+
+  it('requires a document when leave type requires it', async () => {
+    api.get.mockImplementation((path) => {
+      if (path === '/leave/types') {
+        return Promise.resolve([{ id: 't1', name: 'Medical', requiresDoc: true }]);
+      }
+      return Promise.resolve([]);
+    });
+    api.getWithMeta.mockResolvedValue({ data: [], total: 0 });
+
+    const { container } = render(
+      <MemoryRouter initialEntries={['/leave/requests']}>
+        <Routes>
+          <Route path="/leave/*" element={<Leave />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const leaveTypeSelect = await screen.findByRole('combobox', { name: /leave type/i });
+    await userEvent.selectOptions(leaveTypeSelect, 't1');
+    const dateInputs = container.querySelectorAll('input[type="date"]');
+    await userEvent.type(dateInputs[0], '2026-01-10');
+    await userEvent.type(dateInputs[1], '2026-01-10');
+
+    const submit = screen.getByRole('button', { name: /submit request/i });
+    await userEvent.click(submit);
+
+    await waitFor(() => {
+      expect(api.postForm).not.toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toHaveTextContent(/supporting document is required/i);
     });
   });
 });

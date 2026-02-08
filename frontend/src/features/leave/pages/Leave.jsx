@@ -47,7 +47,10 @@ export default function Leave() {
     leaveTypeId: '',
     startDate: '',
     endDate: '',
+    startHalf: false,
+    endHalf: false,
     reason: '',
+    documents: [],
   });
   const [typeForm, setTypeForm] = useState({
     name: '',
@@ -190,6 +193,11 @@ export default function Leave() {
 
   const requests = normalizeArray(requestPage?.data);
   const requestTotal = requestPage?.total ?? requests.length;
+  const selectedLeaveType = useMemo(
+    () => leaveData.types.find((type) => type.id === requestForm.leaveTypeId) || null,
+    [leaveData.types, requestForm.leaveTypeId],
+  );
+  const requestRequiresDoc = Boolean(selectedLeaveType?.requiresDoc);
 
   const typeLookup = useMemo(() => {
     return leaveData.types.reduce((acc, type) => {
@@ -216,15 +224,36 @@ export default function Leave() {
   const submitRequest = async (event) => {
     event.preventDefault();
     setActionError('');
+    if (requestRequiresDoc && requestForm.documents.length === 0) {
+      setActionError('Supporting document is required for the selected leave type.');
+      return;
+    }
+
+    const formData = new FormData();
+    if (employee?.id) {
+      formData.append('employeeId', employee.id);
+    }
+    formData.append('leaveTypeId', requestForm.leaveTypeId);
+    formData.append('startDate', requestForm.startDate);
+    formData.append('endDate', requestForm.endDate);
+    formData.append('startHalf', String(requestForm.startHalf));
+    formData.append('endHalf', String(requestForm.endHalf));
+    formData.append('reason', requestForm.reason || '');
+    requestForm.documents.forEach((file) => {
+      formData.append('documents', file);
+    });
+
     try {
-      await api.post('/leave/requests', {
-        employeeId: employee?.id,
-        leaveTypeId: requestForm.leaveTypeId,
-        startDate: requestForm.startDate,
-        endDate: requestForm.endDate,
-        reason: requestForm.reason,
+      await api.postForm('/leave/requests', formData);
+      setRequestForm({
+        leaveTypeId: '',
+        startDate: '',
+        endDate: '',
+        startHalf: false,
+        endHalf: false,
+        reason: '',
+        documents: [],
       });
-      setRequestForm({ leaveTypeId: '', startDate: '', endDate: '', reason: '' });
       await reloadAll();
     } catch (err) {
       setActionError(err.message);
@@ -351,6 +380,16 @@ export default function Leave() {
     }
   };
 
+  const downloadRequestDocument = async (requestId, documentId) => {
+    setActionError('');
+    try {
+      const file = await api.download(`/leave/requests/${requestId}/documents/${documentId}/download`);
+      downloadBlob(file);
+    } catch (err) {
+      setActionError(err.message);
+    }
+  };
+
   const exportCalendar = async (format) => {
     setActionError('');
     try {
@@ -405,12 +444,15 @@ export default function Leave() {
                 requests={requests}
                 requestForm={requestForm}
                 onFormChange={(field, value) => setRequestForm((prev) => ({ ...prev, [field]: value }))}
+                onDocumentsChange={(files) => setRequestForm((prev) => ({ ...prev, documents: files }))}
                 onSubmit={submitRequest}
                 isManager={isManager}
                 isHR={isHR}
                 onApprove={approveRequest}
                 onReject={rejectRequest}
                 onCancel={cancelRequest}
+                onDownloadDocument={downloadRequestDocument}
+                requiresDocument={requestRequiresDoc}
                 disabled={loading}
               />
 
