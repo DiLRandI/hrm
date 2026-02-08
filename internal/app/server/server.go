@@ -168,8 +168,10 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
+		auditSvc := audit.New(pool)
+
 		authService := authdomain.NewService(authdomain.NewStore(pool))
-		authHandler := authhandler.NewHandler(authService, cfg.JWTSecret, cryptoSvc)
+		authHandler := authhandler.NewHandler(authService, cfg.JWTSecret, cryptoSvc, notifySvc.Mailer, cfg.EmailFrom, cfg.FrontendBaseURL, cfg.PasswordResetTTL, auditSvc)
 		r.With(middleware.RateLimit(cfg.RateLimitPerMinute, time.Minute)).Post("/auth/login", authHandler.HandleLogin)
 		r.Post("/auth/logout", authHandler.HandleLogout)
 		r.Post("/auth/refresh", authHandler.HandleRefresh)
@@ -179,7 +181,6 @@ func buildRouter(cfg config.Config, pool *db.Pool, coreStore *core.Store, crypto
 		r.Post("/auth/mfa/enable", authHandler.HandleMFAEnable)
 		r.Post("/auth/mfa/disable", authHandler.HandleMFADisable)
 
-		auditSvc := audit.New(pool)
 		coreService := core.NewService(coreStore)
 		coreHandler := corehandler.NewHandler(coreService, auditSvc)
 		coreHandler.RegisterRoutes(r)

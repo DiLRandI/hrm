@@ -103,6 +103,22 @@ func (s *Store) UserIDByEmail(ctx context.Context, email string) (string, error)
 	return userID, nil
 }
 
+func (s *Store) UserEmailByID(ctx context.Context, userID string) (string, error) {
+	var email string
+	if err := s.DB.QueryRow(ctx, "SELECT email FROM users WHERE id = $1", userID).Scan(&email); err != nil {
+		return "", err
+	}
+	return email, nil
+}
+
+func (s *Store) TenantIDByUserID(ctx context.Context, userID string) (string, error) {
+	var tenantID string
+	if err := s.DB.QueryRow(ctx, "SELECT tenant_id FROM users WHERE id = $1", userID).Scan(&tenantID); err != nil {
+		return "", err
+	}
+	return tenantID, nil
+}
+
 func (s *Store) CreatePasswordReset(ctx context.Context, userID, tokenHash string, expires time.Time) error {
 	_, err := s.DB.Exec(ctx, "INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)", userID, tokenHash, expires)
 	return err

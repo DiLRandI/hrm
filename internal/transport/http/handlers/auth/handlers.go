@@ -1,33 +1,58 @@
 package authhandler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"path"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
+	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
 	"hrm/internal/domain/core"
 	cryptoutil "hrm/internal/platform/crypto"
 	"hrm/internal/platform/requestctx"
 	"hrm/internal/transport/http/api"
 	"hrm/internal/transport/http/middleware"
+	"hrm/internal/transport/http/shared"
 )
 
 type Handler struct {
-	Service *auth.Service
-	Secret  string
-	Crypto  *cryptoutil.Service
+	Service      *auth.Service
+	Secret       string
+	Crypto       *cryptoutil.Service
+	Mailer       Mailer
+	ResetFrom    string
+	ResetBaseURL string
+	ResetTTL     time.Duration
+	Audit        *audit.Service
 }
 
-func NewHandler(service *auth.Service, secret string, crypto *cryptoutil.Service) *Handler {
-	return &Handler{Service: service, Secret: secret, Crypto: crypto}
+type Mailer interface {
+	Send(ctx context.Context, from, to, subject, body string) error
+}
+
+func NewHandler(service *auth.Service, secret string, crypto *cryptoutil.Service, mailer Mailer, resetFrom, resetBaseURL string, resetTTL time.Duration, auditSvc *audit.Service) *Handler {
+	return &Handler{
+		Service:      service,
+		Secret:       secret,
+		Crypto:       crypto,
+		Mailer:       mailer,
+		ResetFrom:    resetFrom,
+		ResetBaseURL: resetBaseURL,
+		ResetTTL:     resetTTL,
+		Audit:        auditSvc,
+	}
 }
 
 type loginRequest struct {
@@ -48,6 +73,12 @@ type resetPasswordRequest struct {
 type mfaCodeRequest struct {
 	Code string `json:"code"`
 }
+
+var (
+	hasUpper = regexp.MustCompile(`[A-Z]`)
+	hasLower = regexp.MustCompile(`[a-z]`)
+	hasDigit = regexp.MustCompile(`[0-9]`)
+)
 
 func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	var payload loginRequest
@@ -298,10 +329,40 @@ func (h *Handler) HandleRequestReset(w http.ResponseWriter, r *http.Request) {
 			api.Success(w, map[string]string{"status": "reset_requested"}, requestctx.GetRequestID(r.Context()))
 			return
 		}
-		expires := time.Now().Add(2 * time.Hour)
+		expires := time.Now().Add(h.passwordResetTTL())
 		hashed := auth.HashToken(token)
 		if err := h.Service.CreatePasswordReset(r.Context(), userID, hashed, expires); err != nil {
 			slog.Warn("password reset insert failed", "userId", userID, "err", err)
+		} else {
+			recipient := strings.TrimSpace(payload.Email)
+			if email, lookupErr := h.Service.UserEmailByID(r.Context(), userID); lookupErr == nil && strings.TrimSpace(email) != "" {
+				recipient = strings.TrimSpace(email)
+			}
+			if h.Mailer != nil && recipient != "" {
+				resetLink := buildResetLink(h.ResetBaseURL, token)
+				message := buildResetEmailMessage(resetLink, h.passwordResetTTL())
+				if err := h.Mailer.Send(r.Context(), h.ResetFrom, recipient, "PulseHR password reset", message); err != nil {
+					slog.Warn("password reset email send failed", "userId", userID, "err", err)
+				}
+			}
+
+			tenantID, tenantErr := h.Service.TenantIDByUserID(r.Context(), userID)
+			if tenantErr == nil && h.Audit != nil {
+				if err := h.Audit.Record(
+					r.Context(),
+					tenantID,
+					"",
+					"auth.password_reset.request",
+					"user",
+					userID,
+					requestctx.GetRequestID(r.Context()),
+					shared.ClientIP(r),
+					nil,
+					map[string]any{"requested": true},
+				); err != nil {
+					slog.Warn("audit auth.password_reset.request failed", "userId", userID, "err", err)
+				}
+			}
 		}
 	}
 
@@ -312,6 +373,10 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 	var payload resetPasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", requestctx.GetRequestID(r.Context()))
+		return
+	}
+	if err := validateResetPassword(payload.NewPassword); err != nil {
+		api.Fail(w, http.StatusBadRequest, "weak_password", err.Error(), requestctx.GetRequestID(r.Context()))
 		return
 	}
 
@@ -334,6 +399,25 @@ func (h *Handler) HandleResetPassword(w http.ResponseWriter, r *http.Request) {
 	if err := h.Service.MarkPasswordResetUsed(r.Context(), auth.HashToken(payload.Token)); err != nil {
 		slog.Warn("password reset mark used failed", "err", err)
 	}
+	if h.Audit != nil {
+		tenantID, tenantErr := h.Service.TenantIDByUserID(r.Context(), userID)
+		if tenantErr == nil {
+			if err := h.Audit.Record(
+				r.Context(),
+				tenantID,
+				"",
+				"auth.password_reset.complete",
+				"user",
+				userID,
+				requestctx.GetRequestID(r.Context()),
+				shared.ClientIP(r),
+				nil,
+				map[string]any{"status": "password_reset"},
+			); err != nil {
+				slog.Warn("audit auth.password_reset.complete failed", "userId", userID, "err", err)
+			}
+		}
+	}
 
 	api.Success(w, map[string]string{"status": "password_reset"}, requestctx.GetRequestID(r.Context()))
 }
@@ -344,4 +428,59 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buff), nil
+}
+
+func (h *Handler) passwordResetTTL() time.Duration {
+	if h.ResetTTL <= 0 {
+		return 2 * time.Hour
+	}
+	return h.ResetTTL
+}
+
+func buildResetLink(baseURL, token string) string {
+	trimmed := strings.TrimSpace(baseURL)
+	if trimmed == "" {
+		trimmed = "http://localhost:8080"
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		parsed = &url.URL{
+			Scheme: "http",
+			Host:   "localhost:8080",
+		}
+	}
+	parsed.Path = path.Join(strings.TrimSuffix(parsed.Path, "/"), "/reset")
+	query := parsed.Query()
+	query.Set("token", token)
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
+}
+
+func buildResetEmailMessage(resetLink string, ttl time.Duration) string {
+	hours := int(ttl.Hours())
+	if hours <= 0 {
+		hours = 1
+	}
+	return fmt.Sprintf(
+		"A password reset was requested for your PulseHR account.\n\nUse this link to reset your password:\n%s\n\nThis link expires in %d hour(s). If you did not request this, you can ignore this email.",
+		resetLink,
+		hours,
+	)
+}
+
+func validateResetPassword(password string) error {
+	if len(password) < 10 {
+		return fmt.Errorf("password must be at least 10 characters")
+	}
+	if !hasUpper.MatchString(password) {
+		return fmt.Errorf("password must include an uppercase letter")
+	}
+	if !hasLower.MatchString(password) {
+		return fmt.Errorf("password must include a lowercase letter")
+	}
+	if !hasDigit.MatchString(password) {
+		return fmt.Errorf("password must include a number")
+	}
+	return nil
 }

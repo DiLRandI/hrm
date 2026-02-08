@@ -53,6 +53,14 @@ func (s *Service) UserIDByEmail(ctx context.Context, email string) (string, erro
 	return s.Store.UserIDByEmail(ctx, email)
 }
 
+func (s *Service) UserEmailByID(ctx context.Context, userID string) (string, error) {
+	return s.Store.UserEmailByID(ctx, userID)
+}
+
+func (s *Service) TenantIDByUserID(ctx context.Context, userID string) (string, error) {
+	return s.Store.TenantIDByUserID(ctx, userID)
+}
+
 func (s *Service) CreatePasswordReset(ctx context.Context, userID, tokenHash string, expires time.Time) error {
 	return s.Store.CreatePasswordReset(ctx, userID, tokenHash, expires)
 }

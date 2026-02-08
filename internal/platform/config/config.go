@@ -13,6 +13,7 @@ type Config struct {
 	DatabaseURL             string
 	JWTSecret               string
 	DataEncryptionKey       string
+	FrontendBaseURL         string
 	FrontendDir             string
 	Environment             string
 	SeedTenantName          string
@@ -34,6 +35,7 @@ type Config struct {
 	RateLimitPerMinute      int
 	LeaveAccrualInterval    time.Duration
 	RetentionInterval       time.Duration
+	PasswordResetTTL        time.Duration
 	MetricsEnabled          bool
 }
 
@@ -43,6 +45,7 @@ func Load() Config {
 		DatabaseURL:             getEnv("DATABASE_URL", ""),
 		JWTSecret:               getEnv("JWT_SECRET", ""),
 		DataEncryptionKey:       getEnv("DATA_ENCRYPTION_KEY", ""),
+		FrontendBaseURL:         getEnv("FRONTEND_BASE_URL", "http://localhost:8080"),
 		FrontendDir:             getEnv("FRONTEND_DIR", "frontend/dist"),
 		Environment:             getEnv("APP_ENV", "development"),
 		SeedTenantName:          getEnv("SEED_TENANT_NAME", "Default Tenant"),
@@ -64,6 +67,7 @@ func Load() Config {
 		RateLimitPerMinute:      getEnvInt("RATE_LIMIT_PER_MINUTE", 60),
 		LeaveAccrualInterval:    getEnvDuration("LEAVE_ACCRUAL_INTERVAL", 24*time.Hour),
 		RetentionInterval:       getEnvDuration("RETENTION_INTERVAL", 24*time.Hour),
+		PasswordResetTTL:        getEnvDuration("PASSWORD_RESET_TTL", 2*time.Hour),
 		MetricsEnabled:          getEnvBool("METRICS_ENABLED", true),
 	}
 }
@@ -131,6 +135,9 @@ func (c Config) Validate() error {
 	}
 	if c.RateLimitPerMinute <= 0 {
 		return fmt.Errorf("RATE_LIMIT_PER_MINUTE must be positive")
+	}
+	if c.PasswordResetTTL <= 0 {
+		return fmt.Errorf("PASSWORD_RESET_TTL must be positive")
 	}
 	if c.EmailEnabled && c.SMTPHost == "" {
 		return fmt.Errorf("SMTP_HOST must be set when EMAIL_ENABLED is true")

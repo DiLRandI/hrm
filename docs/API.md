@@ -11,7 +11,7 @@ Base path: `/api/v1`
 - `POST /auth/login` → { email, password }
 - `POST /auth/logout`
 - `POST /auth/refresh`
-- `POST /auth/request-reset` → { email }
+- `POST /auth/request-reset` → { email } (returns generic success; sends reset link email when account exists)
 - `POST /auth/reset` → { token, newPassword }
 - `POST /auth/mfa/setup`
 - `POST /auth/mfa/enable`

@@ -27,15 +27,18 @@ Reasoning:
 ## 3) Item checklists with implementation guidance
 
 ## A. Complete password-reset delivery flow
+Status (2026-02-08): Complete (implementation and integration tests in place)
+
 ### A1. Checklist
-- [ ] Add configurable frontend reset URL base (for link generation).
-- [ ] Keep generic API response to prevent account enumeration.
-- [ ] Send reset email containing one-time token link.
-- [ ] Keep storing only token hash in DB; never persist raw token.
-- [ ] Enforce token TTL and one-time usage (already partial; verify end-to-end).
-- [ ] Add password strength validation on reset.
-- [ ] Add audit event(s) for request and successful reset.
-- [ ] Add tests for request, delivery path, and reset success/failure.
+- [x] Add configurable frontend reset URL base (for link generation).
+- [x] Keep generic API response to prevent account enumeration.
+- [x] Send reset email containing one-time token link.
+- [x] Keep storing only token hash in DB; never persist raw token.
+- [x] Enforce token TTL and one-time usage (already partial; verify end-to-end).
+- [x] Add password strength validation on reset.
+- [x] Add audit event(s) for request and successful reset.
+- [x] Add tests for request, delivery path, and reset success/failure.
+- [x] UX: Use token from reset link by default, allow override, and show password requirements in UI.
 
 ### A2. Implementation guidance
 - Primary files:
@@ -64,10 +67,13 @@ Reasoning:
 - Password reset works without exposing whether account exists.
 
 ### A4. Test checklist
-- [ ] Unit: token creation/hash/expiry/used-state behavior.
-- [ ] Integration: `request-reset` -> email dispatch mocked -> `reset`.
-- [ ] Negative: invalid token, expired token, reused token.
-- [ ] Negative: weak password rejected.
+- [x] Unit: password validation and reset-link/message helper behavior.
+- [x] Integration: `request-reset` -> email dispatch mocked -> `reset`.
+- [x] Negative: invalid token, expired token, reused token.
+- [x] Negative: weak password rejected.
+- [x] Negative: unknown email on `request-reset` returns generic success without delivery.
+- [x] Frontend: reset page token-link behavior and client-side validation.
+- Note: backend integration reset tests are DB-backed and run when `TEST_DATABASE_URL` is configured.
 
 ---
 
@@ -277,4 +283,3 @@ Reasoning:
   - Keep additive DB migrations backward-compatible.
   - Preserve old payload fields during one release window.
   - Ensure idempotency changes fail closed (conflict) rather than duplicating side effects.
-

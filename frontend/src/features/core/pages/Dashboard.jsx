@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo } from 'react';
+import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
 import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
 import { getRole } from '../../../shared/utils/role.js';
