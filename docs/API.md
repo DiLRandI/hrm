@@ -44,13 +44,15 @@ Employee onboarding uses `POST /users` with `role=Employee` and an `employee` pa
 
 Current role set:
 - `SystemAdmin`
+- `Admin`
 - `HR`
 - `HRManager`
 - `Manager`
 - `Employee`
 
 Role provisioning policy:
-- `SystemAdmin` can create: `HR`, `HRManager`, `Manager`
+- `SystemAdmin` can create: `Admin`, `HR`, `HRManager`, `Manager`
+- `Admin` can create: `HRManager`, `HR`, `Manager`
 - `HRManager` can create: `HR`, `Employee`
 - `HR` can create: `Employee`
 

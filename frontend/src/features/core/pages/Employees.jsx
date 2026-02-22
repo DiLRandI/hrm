@@ -1,8 +1,8 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
-import { ROLE_EMPLOYEE, ROLE_HR, ROLE_HR_MANAGER } from '../../../shared/constants/roles.js';
+import { ROLE_ADMIN, ROLE_EMPLOYEE, ROLE_HR, ROLE_HR_MANAGER, ROLE_MANAGER, ROLE_SYSTEM_ADMIN } from '../../../shared/constants/roles.js';
 import { EMPLOYEE_STATUS_ACTIVE } from '../../../shared/constants/statuses.js';
 import { getRole } from '../../../shared/utils/role.js';
 import { useApiQuery } from '../../../shared/hooks/useApiQuery.js';
@@ -17,22 +17,42 @@ import RolePermissions from '../components/RolePermissions.jsx';
 
 const EMPLOYEE_LIMIT = 25;
 
+const createRoleOptionsFor = (actorRole) => {
+  switch (actorRole) {
+    case ROLE_SYSTEM_ADMIN:
+      return [ROLE_ADMIN, ROLE_HR, ROLE_HR_MANAGER, ROLE_MANAGER];
+    case ROLE_ADMIN:
+      return [ROLE_HR_MANAGER, ROLE_HR, ROLE_MANAGER];
+    case ROLE_HR_MANAGER:
+      return [ROLE_HR, ROLE_EMPLOYEE];
+    case ROLE_HR:
+      return [ROLE_EMPLOYEE];
+    default:
+      return [ROLE_EMPLOYEE];
+  }
+};
+
 export default function Employees() {
   const { user } = useAuth();
   const role = getRole(user);
   const isHR = role === ROLE_HR || role === ROLE_HR_MANAGER;
+  const canManageUsers = isHR || role === ROLE_SYSTEM_ADMIN || role === ROLE_ADMIN;
+  const canViewDirectory = role !== ROLE_SYSTEM_ADMIN;
+  const canLoadEmployeeData = canViewDirectory || canManageUsers;
   const location = useLocation();
   const activeSection = useMemo(() => {
     const segment = location.pathname.split('/')[2];
     return segment || 'overview';
   }, [location.pathname]);
+  const createRoleOptions = useMemo(() => createRoleOptionsFor(role), [role]);
+  const defaultCreateRole = createRoleOptions[0] || ROLE_EMPLOYEE;
   const [employeeOffset, setEmployeeOffset] = useState(0);
   const [selectedRole, setSelectedRole] = useState('');
   const [selectedPerms, setSelectedPerms] = useState([]);
   const [editEmployee, setEditEmployee] = useState(null);
   const [managerHistory, setManagerHistory] = useState([]);
   const [actionError, setActionError] = useState('');
-  const [form, setForm] = useState({ firstName: '', lastName: '', email: '' });
+  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', role: defaultCreateRole });
   const [tempCredentials, setTempCredentials] = useState(null);
   const [departmentForm, setDepartmentForm] = useState({
     name: '',
@@ -53,7 +73,7 @@ export default function Employees() {
     loading: employeesLoading,
     reload: reloadEmployees,
   } = useApiQuery(fetchEmployees, [employeeOffset, activeSection], {
-    enabled: activeSection === 'directory' || activeSection === 'overview',
+    enabled: canLoadEmployeeData && (activeSection === 'directory' || activeSection === 'overview'),
     initialData: { data: [], total: 0 },
   });
 
@@ -62,14 +82,14 @@ export default function Employees() {
 
   const lookupNeeds = useMemo(() => {
     return {
-      departments: activeSection === 'directory' || (isHR && activeSection === 'manage'),
-      orgChart: activeSection === 'org',
+      departments: canViewDirectory && (activeSection === 'directory' || (isHR && activeSection === 'manage')),
+      orgChart: canViewDirectory && activeSection === 'org',
       payGroups: isHR && (activeSection === 'manage' || activeSection === 'directory'),
       roles: isHR && activeSection === 'access',
       permissions: isHR && activeSection === 'access',
       employeeOptions: isHR && activeSection === 'manage',
     };
-  }, [activeSection, isHR]);
+  }, [activeSection, canViewDirectory, isHR]);
 
   const lookupsEnabled = Object.values(lookupNeeds).some(Boolean);
 
@@ -152,6 +172,15 @@ export default function Employees() {
   });
 
   const employeeOptions = isHR ? (lookups.employeeOptions.length ? lookups.employeeOptions : employees) : employees;
+
+  useEffect(() => {
+    setForm((prev) => {
+      if (createRoleOptions.includes(prev.role)) {
+        return prev;
+      }
+      return { ...prev, role: defaultCreateRole };
+    });
+  }, [createRoleOptions, defaultCreateRole]);
 
   const payGroupById = useMemo(() => {
     return (lookups.payGroups || []).reduce((acc, group) => {
@@ -240,24 +269,38 @@ export default function Employees() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setActionError('');
+    const roleToCreate = form.role || defaultCreateRole;
+    if (!form.email.trim()) {
+      setActionError('Email is required');
+      return;
+    }
+    const requiresEmployeeProfile = roleToCreate === ROLE_EMPLOYEE || roleToCreate === ROLE_MANAGER;
+    if (requiresEmployeeProfile && (!form.firstName.trim() || !form.lastName.trim())) {
+      setActionError('First and last name are required for Employee and Manager onboarding');
+      return;
+    }
     try {
-      const result = await api.post('/users', {
-        email: form.email,
-        role: ROLE_EMPLOYEE,
+      const payload = {
+        email: form.email.trim(),
+        role: roleToCreate,
         status: EMPLOYEE_STATUS_ACTIVE,
-        employee: {
-          firstName: form.firstName,
-          lastName: form.lastName,
-          email: form.email,
+      };
+      if (requiresEmployeeProfile) {
+        payload.employee = {
+          firstName: form.firstName.trim(),
+          lastName: form.lastName.trim(),
+          email: form.email.trim(),
           status: EMPLOYEE_STATUS_ACTIVE,
-        },
-      });
+        };
+      }
+
+      const result = await api.post('/users', payload);
       if (result?.tempPassword) {
-        setTempCredentials({ email: form.email, password: result.tempPassword });
+        setTempCredentials({ email: form.email.trim(), password: result.tempPassword });
       } else {
         setTempCredentials(null);
       }
-      setForm({ firstName: '', lastName: '', email: '' });
+      setForm({ firstName: '', lastName: '', email: '', role: defaultCreateRole });
       await reloadAll();
     } catch (err) {
       setActionError(err.message);
@@ -328,7 +371,7 @@ export default function Employees() {
   const loading = employeesLoading || lookupsLoading;
   const combinedError =
     actionError ||
-    (activeSection === 'directory' ? employeeError : '') ||
+    (canLoadEmployeeData && (activeSection === 'directory' || activeSection === 'overview') ? employeeError : '') ||
     (lookupsEnabled ? lookupError : '');
 
   return (
@@ -344,14 +387,14 @@ export default function Employees() {
 
       <nav className="subnav">
         <NavLink to="/employees/overview">Overview</NavLink>
-        <NavLink to="/employees/directory">Directory</NavLink>
-        {isHR && <NavLink to="/employees/manage">Add & Edit</NavLink>}
-        <NavLink to="/employees/org">Org chart</NavLink>
+        {canViewDirectory && <NavLink to="/employees/directory">Directory</NavLink>}
+        {canManageUsers && <NavLink to="/employees/manage">Add & Edit</NavLink>}
+        {canViewDirectory && <NavLink to="/employees/org">Org chart</NavLink>}
         {isHR && <NavLink to="/employees/access">Roles & Access</NavLink>}
       </nav>
 
       <Routes>
-        <Route path="/" element={<Navigate to="overview" replace />} />
+	        <Route path="/" element={<Navigate to="/employees/overview" replace />} />
         <Route
           path="overview"
           element={
@@ -369,56 +412,58 @@ export default function Employees() {
               <div className="card">
                 <h3>Quick actions</h3>
                 <div className="row-actions">
-                  {isHR && <NavLink className="ghost-link" to="/employees/manage">Add employee</NavLink>}
-                  <NavLink className="ghost-link" to="/employees/org">View org chart</NavLink>
+                  {canManageUsers && <NavLink className="ghost-link" to="/employees/manage">Add user</NavLink>}
+                  {canViewDirectory && <NavLink className="ghost-link" to="/employees/org">View org chart</NavLink>}
                 </div>
               </div>
             </div>
           }
         />
-        <Route
-          path="directory"
-          element={
-            <>
-              {loading && employees.length === 0 && (
-                <PageStatus title="Loading employees" description="Preparing people records and org data." />
-              )}
+        {canViewDirectory && (
+          <Route
+            path="directory"
+            element={
+              <>
+                {loading && employees.length === 0 && (
+                  <PageStatus title="Loading employees" description="Preparing people records and org data." />
+                )}
 
-              {!loading && employees.length === 0 ? (
-                <EmptyState
-                  title="No employees yet"
-                  description="Once employees are added, they will appear here with contact and status details."
-                />
-              ) : (
-                <EmployeeTable
-                  employees={employees}
-                  showDepartment
-                  departmentById={departmentById}
-                  showPayGroup={isHR}
-                  payGroupById={payGroupById}
-                />
-              )}
+                {!loading && employees.length === 0 ? (
+                  <EmptyState
+                    title="No employees yet"
+                    description="Once employees are added, they will appear here with contact and status details."
+                  />
+                ) : (
+                  <EmployeeTable
+                    employees={employees}
+                    showDepartment
+                    departmentById={departmentById}
+                    showPayGroup={isHR}
+                    payGroupById={payGroupById}
+                  />
+                )}
 
-              <div className="row-actions pagination">
-                <button type="button" className="ghost" onClick={prevEmployees} disabled={employeeOffset === 0}>
-                  Prev
-                </button>
-                <small>
-                  {employeeTotal ? `${Math.min(employeeOffset + EMPLOYEE_LIMIT, employeeTotal)} of ${employeeTotal}` : '—'}
-                </small>
-                <button
-                  type="button"
-                  className="ghost"
-                  onClick={nextEmployees}
-                  disabled={employeeTotal ? employeeOffset + EMPLOYEE_LIMIT >= employeeTotal : employees.length < EMPLOYEE_LIMIT}
-                >
-                  Next
-                </button>
-              </div>
-            </>
-          }
-        />
-        {isHR && (
+                <div className="row-actions pagination">
+                  <button type="button" className="ghost" onClick={prevEmployees} disabled={employeeOffset === 0}>
+                    Prev
+                  </button>
+                  <small>
+                    {employeeTotal ? `${Math.min(employeeOffset + EMPLOYEE_LIMIT, employeeTotal)} of ${employeeTotal}` : '—'}
+                  </small>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={nextEmployees}
+                    disabled={employeeTotal ? employeeOffset + EMPLOYEE_LIMIT >= employeeTotal : employees.length < EMPLOYEE_LIMIT}
+                  >
+                    Next
+                  </button>
+                </div>
+              </>
+            }
+          />
+        )}
+        {canManageUsers && (
           <Route
             path="manage"
             element={
@@ -453,46 +498,53 @@ export default function Employees() {
 
                 <EmployeeCreateForm
                   form={form}
+                  availableRoles={createRoleOptions}
                   onChange={handleFormChange}
                   onSubmit={handleSubmit}
                   disabled={loading}
                 />
 
-                <EmployeeEditForm
-                  employeeOptions={employeeOptions}
-                  departments={lookups.departments}
-                  payGroups={lookups.payGroups}
-                  editEmployee={editEmployee}
-                  onSelectEmployee={handleSelectEmployee}
-                  onFieldChange={(field, value) => setEditEmployee((prev) => ({ ...prev, [field]: value }))}
-                  onSubmit={handleUpdateEmployee}
-                  disabled={loading}
-                />
+                {isHR && (
+                  <>
+                    <EmployeeEditForm
+                      employeeOptions={employeeOptions}
+                      departments={lookups.departments}
+                      payGroups={lookups.payGroups}
+                      editEmployee={editEmployee}
+                      onSelectEmployee={handleSelectEmployee}
+                      onFieldChange={(field, value) => setEditEmployee((prev) => ({ ...prev, [field]: value }))}
+                      onSubmit={handleUpdateEmployee}
+                      disabled={loading}
+                    />
 
-                <DepartmentsCard
-                  departments={lookups.departments}
-                  employees={employeeOptions}
-                  form={departmentForm}
-                  editingId={editingDepartmentId}
-                  onChange={handleDepartmentChange}
-                  onSubmit={handleDepartmentSubmit}
-                  onEdit={handleEditDepartment}
-                  onCancelEdit={resetDepartmentForm}
-                  onDelete={handleDeleteDepartment}
-                  disabled={loading}
-                />
+                    <DepartmentsCard
+                      departments={lookups.departments}
+                      employees={employeeOptions}
+                      form={departmentForm}
+                      editingId={editingDepartmentId}
+                      onChange={handleDepartmentChange}
+                      onSubmit={handleDepartmentSubmit}
+                      onEdit={handleEditDepartment}
+                      onCancelEdit={resetDepartmentForm}
+                      onDelete={handleDeleteDepartment}
+                      disabled={loading}
+                    />
 
-                <ManagerHistory history={managerHistory} />
+                    <ManagerHistory history={managerHistory} />
+                  </>
+                )}
               </>
             }
           />
         )}
-        <Route
-          path="org"
-          element={
-            <OrgChart orgChart={lookups.orgChart} />
-          }
-        />
+        {canViewDirectory && (
+          <Route
+            path="org"
+            element={
+              <OrgChart orgChart={lookups.orgChart} />
+            }
+          />
+        )}
         {isHR && (
           <Route
             path="access"
@@ -510,7 +562,7 @@ export default function Employees() {
             }
           />
         )}
-        <Route path="*" element={<Navigate to="overview" replace />} />
+	        <Route path="*" element={<Navigate to="/employees/overview" replace />} />
       </Routes>
     </section>
   );

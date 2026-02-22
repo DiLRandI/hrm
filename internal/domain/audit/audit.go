@@ -53,20 +53,26 @@ func (s *Service) Record(ctx context.Context, tenantID, actorID, action, entityT
 		afterJSON = payload
 	}
 
-	var actor any
-	if strings.TrimSpace(actorID) != "" {
-		actor = actorID
-	}
-	var entity any
-	if strings.TrimSpace(entityID) != "" {
-		entity = entityID
-	}
+	actor := optionalUUIDArg(actorID)
+	entity := optionalUUIDArg(entityID)
 
 	_, err := s.DB.Exec(ctx, `
     INSERT INTO audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, before_json, after_json, request_id, ip)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
   `, tenantID, actor, action, entityType, entity, beforeJSON, afterJSON, requestID, ip)
 	return err
+}
+
+func optionalUUIDArg(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	trimmed = strings.Trim(trimmed, "\"")
+	if strings.TrimSpace(trimmed) == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func (s *Service) Count(ctx context.Context, tenantID string, filter Filter) (int, error) {

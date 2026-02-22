@@ -34,7 +34,7 @@ export default function Performance() {
   const [summary, setSummary] = useState(null);
   const [error, setError] = useState('');
 
-  const [goalForm, setGoalForm] = useState({ title: '', metric: '', dueDate: '', weight: '' });
+  const [goalForm, setGoalForm] = useState({ employeeId: '', title: '', metric: '', dueDate: '', weight: '' });
   const [templateForm, setTemplateForm] = useState({ name: '', ratingScale: '', questions: '' });
   const [cycleForm, setCycleForm] = useState({ name: '', startDate: '', endDate: '', templateId: '', hrRequired: false });
   const [reviewForm, setReviewForm] = useState({ taskId: '', rating: '' });
@@ -107,9 +107,14 @@ export default function Performance() {
 
   const submitGoal = async (e) => {
     e.preventDefault();
+    const targetEmployeeID = (isHR || isManager) ? goalForm.employeeId : employee?.id;
+    if (!targetEmployeeID) {
+      setError('Select an employee for this goal');
+      return;
+    }
     try {
       await api.post('/performance/goals', {
-        employeeId: employee?.id,
+        employeeId: targetEmployeeID,
         title: goalForm.title,
         metric: goalForm.metric,
         dueDate: goalForm.dueDate,
@@ -117,7 +122,7 @@ export default function Performance() {
         status: GOAL_STATUS_ACTIVE,
         progress: 0,
       });
-      setGoalForm({ title: '', metric: '', dueDate: '', weight: '' });
+      setGoalForm({ employeeId: '', title: '', metric: '', dueDate: '', weight: '' });
       await load();
     } catch (err) {
       setError(err.message);
@@ -259,7 +264,7 @@ export default function Performance() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<Navigate to="overview" replace />} />
+	        <Route path="/" element={<Navigate to="/performance/overview" replace />} />
         <Route
           path="overview"
           element={
@@ -296,6 +301,16 @@ export default function Performance() {
               <div className="card">
                 <h3>Goals</h3>
                 <form className="stack" onSubmit={submitGoal}>
+                  {(isHR || isManager) && (
+                    <select value={goalForm.employeeId} onChange={(e) => setGoalForm({ ...goalForm, employeeId: e.target.value })}>
+                      <option value="">Select employee</option>
+                      {employees.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {`${item.firstName || ''} ${item.lastName || ''}`.trim() || item.email || item.id}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <input placeholder="Goal title" value={goalForm.title} onChange={(e) => setGoalForm({ ...goalForm, title: e.target.value })} />
                   <input placeholder="Metric" value={goalForm.metric} onChange={(e) => setGoalForm({ ...goalForm, metric: e.target.value })} />
                   <input type="date" value={goalForm.dueDate} onChange={(e) => setGoalForm({ ...goalForm, dueDate: e.target.value })} />
@@ -609,7 +624,7 @@ export default function Performance() {
             }
           />
         )}
-        <Route path="*" element={<Navigate to="overview" replace />} />
+	        <Route path="*" element={<Navigate to="/performance/overview" replace />} />
       </Routes>
     </section>
   );

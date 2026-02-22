@@ -273,7 +273,7 @@ export default function GDPR() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<Navigate to="overview" replace />} />
+	        <Route path="/" element={<Navigate to="/gdpr/overview" replace />} />
         <Route
           path="overview"
           element={
@@ -578,7 +578,7 @@ export default function GDPR() {
             }
           />
         )}
-        <Route path="*" element={<Navigate to="overview" replace />} />
+	        <Route path="*" element={<Navigate to="/gdpr/overview" replace />} />
       </Routes>
     </section>
   );

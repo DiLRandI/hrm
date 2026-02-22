@@ -67,13 +67,17 @@ func (h *Handler) handleListGoals(w http.ResponseWriter, r *http.Request) {
 		} else {
 			employeeID = id
 		}
+		if employeeID == "" {
+			api.Success(w, []performance.Goal{}, middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
-		id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("goal list manager lookup failed", "err", err)
-		} else {
+		if id, ok := h.managerEmployeeID(r, user, "goal list manager lookup failed"); ok {
 			managerEmployeeID = id
+		} else {
+			api.Success(w, []performance.Goal{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 
@@ -108,17 +112,47 @@ func (h *Handler) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if payload.EmployeeID == "" {
-		if id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err != nil {
+	switch user.RoleName {
+	case auth.RoleEmployee:
+		selfEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+		if err != nil {
 			slog.Warn("goal create employee lookup failed", "err", err)
+		}
+		if selfEmployeeID == "" {
+			api.Fail(w, http.StatusForbidden, "forbidden", "employee profile is not configured", middleware.GetRequestID(r.Context()))
+			return
+		}
+		payload.EmployeeID = selfEmployeeID
+	case auth.RoleManager:
+		managerEmployeeID, ok := h.managerEmployeeID(r, user, "goal create manager lookup failed")
+		if !ok {
+			api.Fail(w, http.StatusForbidden, "forbidden", "manager profile is not configured", middleware.GetRequestID(r.Context()))
+			return
+		}
+		if payload.EmployeeID == "" {
+			payload.EmployeeID = managerEmployeeID
+		}
+		if payload.EmployeeID != managerEmployeeID {
+			allowed, err := h.Service.IsManagerOfEmployee(r.Context(), user.TenantID, payload.EmployeeID, managerEmployeeID)
+			if err != nil {
+				slog.Warn("goal create manager scope failed", "err", err)
+			}
+			if !allowed {
+				api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+				return
+			}
+			payload.ManagerID = managerEmployeeID
 		} else {
-			payload.EmployeeID = id
+			// For self-goals, resolve manager relation from the employee record.
+			payload.ManagerID = ""
 		}
 	}
+
 	if payload.EmployeeID == "" {
 		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee id required", middleware.GetRequestID(r.Context()))
 		return
 	}
+
 	if payload.ManagerID == "" {
 		if id, err := h.Service.ManagerIDByEmployeeID(r.Context(), user.TenantID, payload.EmployeeID); err != nil {
 			slog.Warn("goal create manager lookup failed", "err", err)
@@ -494,13 +528,17 @@ func (h *Handler) handleListReviewTasks(w http.ResponseWriter, r *http.Request) 
 		} else {
 			employeeID = id
 		}
+		if employeeID == "" {
+			api.Success(w, []performance.ReviewTask{}, middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
-		id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("review tasks manager lookup failed", "err", err)
-		} else {
+		if id, ok := h.managerEmployeeID(r, user, "review tasks manager lookup failed"); ok {
 			managerEmployeeID = id
+		} else {
+			api.Success(w, []performance.ReviewTask{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 
@@ -649,13 +687,17 @@ func (h *Handler) handleListFeedback(w http.ResponseWriter, r *http.Request) {
 		} else {
 			employeeID = id
 		}
+		if employeeID == "" {
+			api.Success(w, []performance.Feedback{}, middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
-		id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("feedback list manager lookup failed", "err", err)
-		} else {
+		if id, ok := h.managerEmployeeID(r, user, "feedback list manager lookup failed"); ok {
 			managerEmployeeID = id
+		} else {
+			api.Success(w, []performance.Feedback{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 
@@ -699,9 +741,10 @@ func (h *Handler) handleCreateFeedback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if user.RoleName == auth.RoleManager {
-		managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("feedback create manager lookup failed", "err", err)
+		managerEmployeeID, ok := h.managerEmployeeID(r, user, "feedback create manager lookup failed")
+		if !ok {
+			api.Fail(w, http.StatusForbidden, "forbidden", "manager profile is not configured", middleware.GetRequestID(r.Context()))
+			return
 		}
 		allowed, err := h.Service.IsManagerOfEmployee(r.Context(), user.TenantID, payload.ToEmployeeID, managerEmployeeID)
 		if err != nil {
@@ -751,13 +794,17 @@ func (h *Handler) handleListCheckins(w http.ResponseWriter, r *http.Request) {
 		} else {
 			employeeID = id
 		}
+		if employeeID == "" {
+			api.Success(w, []performance.Checkin{}, middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
-		id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("checkin list manager lookup failed", "err", err)
-		} else {
+		if id, ok := h.managerEmployeeID(r, user, "checkin list manager lookup failed"); ok {
 			managerEmployeeID = id
+		} else {
+			api.Success(w, []performance.Checkin{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 
@@ -808,9 +855,10 @@ func (h *Handler) handleCreateCheckin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if user.RoleName == auth.RoleManager {
-		managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("checkin create manager lookup failed", "err", err)
+		managerEmployeeID, ok := h.managerEmployeeID(r, user, "checkin create manager lookup failed")
+		if !ok {
+			api.Fail(w, http.StatusForbidden, "forbidden", "manager profile is not configured", middleware.GetRequestID(r.Context()))
+			return
 		}
 		allowed, err := h.Service.IsManagerOfEmployee(r.Context(), user.TenantID, payload.EmployeeID, managerEmployeeID)
 		if err != nil {
@@ -849,13 +897,17 @@ func (h *Handler) handleListPIPs(w http.ResponseWriter, r *http.Request) {
 		} else {
 			employeeID = id
 		}
+		if employeeID == "" {
+			api.Success(w, []performance.PIP{}, middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
-		id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("pip list manager lookup failed", "err", err)
-		} else {
+		if id, ok := h.managerEmployeeID(r, user, "pip list manager lookup failed"); ok {
 			managerEmployeeID = id
+		} else {
+			api.Success(w, []performance.PIP{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 
@@ -924,9 +976,10 @@ func (h *Handler) handleCreatePIP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user.RoleName == auth.RoleManager {
-		managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("pip create manager lookup failed", "err", err)
+		managerEmployeeID, ok := h.managerEmployeeID(r, user, "pip create manager lookup failed")
+		if !ok {
+			api.Fail(w, http.StatusForbidden, "forbidden", "manager profile is not configured", middleware.GetRequestID(r.Context()))
+			return
 		}
 		allowed, err := h.Service.IsManagerOfEmployee(r.Context(), user.TenantID, employeeID, managerEmployeeID)
 		if err != nil {
@@ -1046,11 +1099,11 @@ func (h *Handler) handlePerformanceSummary(w http.ResponseWriter, r *http.Reques
 
 	managerEmployeeID := ""
 	if user.RoleName == auth.RoleManager {
-		id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-		if err != nil {
-			slog.Warn("performance summary manager lookup failed", "err", err)
-		} else {
+		if id, ok := h.managerEmployeeID(r, user, "performance summary manager lookup failed"); ok {
 			managerEmployeeID = id
+		} else {
+			api.Success(w, performance.PerformanceSummary{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 
@@ -1066,4 +1119,16 @@ func nullIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+func (h *Handler) managerEmployeeID(r *http.Request, user auth.UserContext, warnMsg string) (string, bool) {
+	id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+	if err != nil {
+		slog.Warn(warnMsg, "err", err)
+		return "", false
+	}
+	if id == "" {
+		return "", false
+	}
+	return id, true
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"hrm/internal/domain/auth"
@@ -36,6 +37,10 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) error {
 	}
 
 	if err := ensureAdminUser(ctx, pool, tenantID, roleIDs[auth.RoleHR], cfg.SeedAdminEmail, cfg.SeedAdminPassword); err != nil {
+		return err
+	}
+
+	if err := ensureDefaultLeaveSetup(ctx, pool, tenantID); err != nil {
 		return err
 	}
 
@@ -170,5 +175,49 @@ func ensureTenantSettings(ctx context.Context, pool *pgxpool.Pool, tenantID, ema
     VALUES ($1, false, $2)
     ON CONFLICT (tenant_id) DO NOTHING
   `, tenantID, emailFrom)
+	return err
+}
+
+func ensureDefaultLeaveSetup(ctx context.Context, pool *pgxpool.Pool, tenantID string) error {
+	const (
+		defaultLeaveTypeName = "Annual Leave"
+		defaultLeaveTypeCode = "ANNUAL"
+	)
+
+	var leaveTypeID string
+	err := pool.QueryRow(ctx, `
+    SELECT id
+    FROM leave_types
+    WHERE tenant_id = $1 AND code = $2
+  `, tenantID, defaultLeaveTypeCode).Scan(&leaveTypeID)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err := pool.QueryRow(ctx, `
+      INSERT INTO leave_types (tenant_id, name, code, is_paid, requires_doc)
+      VALUES ($1, $2, $3, true, false)
+      RETURNING id
+    `, tenantID, defaultLeaveTypeName, defaultLeaveTypeCode).Scan(&leaveTypeID); err != nil {
+			return err
+		}
+	}
+
+	var policyCount int
+	if err := pool.QueryRow(ctx, `
+    SELECT COUNT(1)
+    FROM leave_policies
+    WHERE tenant_id = $1 AND leave_type_id = $2
+  `, tenantID, leaveTypeID).Scan(&policyCount); err != nil {
+		return err
+	}
+	if policyCount > 0 {
+		return nil
+	}
+
+	_, err = pool.Exec(ctx, `
+    INSERT INTO leave_policies (tenant_id, leave_type_id, accrual_rate, accrual_period, entitlement, carry_over_limit, allow_negative, requires_hr_approval)
+    VALUES ($1, $2, 1.5, 'monthly', 18, 5, false, false)
+  `, tenantID, leaveTypeID)
 	return err
 }

@@ -187,7 +187,7 @@ func (s *Store) CreateReviewTemplate(ctx context.Context, tenantID, name string,
 
 func (s *Store) ListReviewCycles(ctx context.Context, tenantID string) ([]ReviewCycle, error) {
 	rows, err := s.DB.Query(ctx, `
-    SELECT id, name, start_date, end_date, status, COALESCE(template_id, ''), hr_required
+    SELECT id, name, start_date, end_date, status, COALESCE(template_id::text, ''), hr_required
     FROM review_cycles
     WHERE tenant_id = $1
     ORDER BY start_date DESC
@@ -399,7 +399,7 @@ func (s *Store) CreateFeedback(ctx context.Context, tenantID, fromUserID, toEmpl
 
 func (s *Store) ListCheckins(ctx context.Context, tenantID, employeeID, managerID string) ([]Checkin, error) {
 	query := `
-    SELECT id, employee_id, manager_id, notes, private, created_at
+    SELECT id, employee_id, COALESCE(manager_id::text, ''), notes, private, created_at
     FROM checkins
     WHERE tenant_id = $1
   `
@@ -440,7 +440,7 @@ func (s *Store) CreateCheckin(ctx context.Context, tenantID, employeeID, manager
 
 func (s *Store) ListPIPs(ctx context.Context, tenantID, employeeID, managerID string) ([]PIP, error) {
 	query := `
-    SELECT id, employee_id, manager_id, hr_owner_id, objectives_json, milestones_json, review_dates_json, status, created_at
+    SELECT id, employee_id, COALESCE(manager_id::text, ''), COALESCE(hr_owner_id::text, ''), objectives_json, milestones_json, review_dates_json, status, created_at
     FROM pips
     WHERE tenant_id = $1
   `
@@ -490,7 +490,7 @@ func (s *Store) CreatePIP(ctx context.Context, tenantID, employeeID, managerID, 
 func (s *Store) GetPIP(ctx context.Context, tenantID, pipID string) (string, string, error) {
 	var employeeID, managerID string
 	if err := s.DB.QueryRow(ctx, `
-    SELECT employee_id, manager_id
+    SELECT employee_id, COALESCE(manager_id::text, '')
     FROM pips
     WHERE tenant_id = $1 AND id = $2
   `, tenantID, pipID).Scan(&employeeID, &managerID); err != nil {

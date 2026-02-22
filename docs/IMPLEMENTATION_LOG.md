@@ -3,6 +3,7 @@
 Start: 2026-01-17
 
 ## Log
+- 2026-02-22: Added `Admin` role support end-to-end (role catalog, provisioning policy, UI role options), seeded default first-run leave type/policy, reduced non-actionable manager lookup warnings, and rendered leave-request employee names instead of raw IDs.
 - 2026-02-22: Removed legacy employee-create endpoint (`POST /employees`), migrated UI/test onboarding to `POST /users`, and consolidated account provisioning on the `/users` flow.
 - 2026-02-22: Implemented role rollout foundation with new `HRManager` role, hierarchical user provisioning APIs (`/users`), tenant-bound manager-history access checks, and seed bootstrap guard requiring a system admin on fresh installs.
 - 2026-02-22: Fixed password-reset audit insertion failures by normalizing empty actor/entity UUIDs to SQL `NULL` in audit event writes.

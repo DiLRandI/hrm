@@ -200,7 +200,7 @@ func (s *Service) ApproveRequest(ctx context.Context, tenantID, requestID, appro
 			managerEmployeeID, err := s.Employees.ManagerIDByEmployeeID(ctx, tenantID, employeeID)
 			if err == nil && managerEmployeeID != "" {
 				selfEmployeeID, err := s.Employees.EmployeeIDByUserID(ctx, tenantID, approverUserID)
-				if err == nil && selfEmployeeID != managerEmployeeID {
+				if err != nil || selfEmployeeID == "" || selfEmployeeID != managerEmployeeID {
 					return result, ErrForbidden
 				}
 			}
@@ -263,7 +263,7 @@ func (s *Service) RejectRequest(ctx context.Context, tenantID, requestID, approv
 			managerEmployeeID, err := s.Employees.ManagerIDByEmployeeID(ctx, tenantID, employeeID)
 			if err == nil && managerEmployeeID != "" {
 				selfEmployeeID, err := s.Employees.EmployeeIDByUserID(ctx, tenantID, approverUserID)
-				if err == nil && selfEmployeeID != managerEmployeeID {
+				if err != nil || selfEmployeeID == "" || selfEmployeeID != managerEmployeeID {
 					return RejectResult{}, ErrForbidden
 				}
 			}
@@ -349,6 +349,9 @@ func (s *Service) CalendarEntries(ctx context.Context, tenantID, roleName, userI
 		if id, err := s.EmployeeIDByUserID(ctx, tenantID, userID); err == nil {
 			employeeID = id
 		}
+		if employeeID == "" {
+			return []CalendarEntry{}, nil
+		}
 	}
 	statuses := []string{StatusPending, StatusPendingHR, StatusApproved}
 	return s.Store.CalendarEntries(ctx, tenantID, statuses, employeeID)
@@ -362,10 +365,16 @@ func (s *Service) CalendarExportRows(ctx context.Context, tenantID, roleName, us
 		if id, err := s.EmployeeIDByUserID(ctx, tenantID, userID); err == nil {
 			employeeID = id
 		}
+		if employeeID == "" {
+			return []CalendarExportRow{}, nil
+		}
 	}
 	if roleName == auth.RoleManager {
 		if id, err := s.EmployeeIDByUserID(ctx, tenantID, userID); err == nil {
 			managerID = id
+		}
+		if managerID == "" {
+			return []CalendarExportRow{}, nil
 		}
 	}
 	return s.Store.CalendarExportRows(ctx, tenantID, statuses, employeeID, managerID)

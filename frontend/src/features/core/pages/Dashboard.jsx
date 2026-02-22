@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from 'react';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
-import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
+import { ROLE_ADMIN, ROLE_HR, ROLE_HR_MANAGER, ROLE_MANAGER, ROLE_SYSTEM_ADMIN } from '../../../shared/constants/roles.js';
 import { getRole } from '../../../shared/utils/role.js';
 import { useApiQuery } from '../../../shared/hooks/useApiQuery.js';
 import { InlineError, PageStatus } from '../../../shared/components/PageStatus.jsx';
@@ -10,11 +10,14 @@ export default function Dashboard() {
   const { user, employee } = useAuth();
   const role = getRole(user);
   const dashboardEndpoint = useMemo(() => {
-    if (role === ROLE_HR) {
+    if (role === ROLE_HR || role === ROLE_HR_MANAGER) {
       return '/reports/dashboard/hr';
     }
     if (role === ROLE_MANAGER) {
       return '/reports/dashboard/manager';
+    }
+    if (role === ROLE_SYSTEM_ADMIN || role === ROLE_ADMIN) {
+      return '';
     }
     return '/reports/dashboard/employee';
   }, [role]);
@@ -24,7 +27,10 @@ export default function Dashboard() {
     [dashboardEndpoint],
   );
 
-  const { data, error, loading } = useApiQuery(fetchDashboard, [dashboardEndpoint], { enabled: Boolean(user) });
+  const { data, error, loading } = useApiQuery(fetchDashboard, [dashboardEndpoint], {
+    enabled: Boolean(user && dashboardEndpoint),
+    initialData: null,
+  });
 
   return (
     <section className="page">
@@ -39,6 +45,13 @@ export default function Dashboard() {
 
       {loading && (
         <PageStatus title="Loading dashboard" description="Fetching your latest HR snapshot." />
+      )}
+
+      {!dashboardEndpoint && (
+        <div className="card">
+          <h3>Admin workspace</h3>
+          <p>Use People management to provision and maintain organization access.</p>
+        </div>
       )}
 
       {data && !loading && (

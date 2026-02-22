@@ -546,7 +546,7 @@ func (s *Store) DepartmentCount(ctx context.Context, tenantID string) (int, erro
 
 func (s *Store) ListDepartments(ctx context.Context, tenantID string, limit, offset int) ([]Department, error) {
 	rows, err := s.DB.Query(ctx, `
-    SELECT id, name, COALESCE(department_code, ''), parent_id, manager_id, created_at
+    SELECT id, name, COALESCE(department_code, ''), COALESCE(parent_id::text, ''), COALESCE(manager_id::text, ''), created_at
     FROM departments
     WHERE tenant_id = $1
     ORDER BY name

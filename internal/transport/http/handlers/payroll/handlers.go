@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
@@ -83,6 +84,9 @@ func (h *Handler) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
+		return
+	}
 	schedules, err := h.Service.ListSchedules(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_schedules_failed", "failed to list schedules", middleware.GetRequestID(r.Context()))
@@ -122,6 +126,9 @@ func (h *Handler) handleListGroups(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
 		return
 	}
 
@@ -167,6 +174,9 @@ func (h *Handler) handleListElements(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
+		return
+	}
 	elements, err := h.Service.ListElements(r.Context(), user.TenantID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "payroll_elements_failed", "failed to list elements", middleware.GetRequestID(r.Context()))
@@ -208,6 +218,9 @@ func (h *Handler) handleListJournalTemplates(w http.ResponseWriter, r *http.Requ
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
 		return
 	}
 
@@ -254,6 +267,9 @@ func (h *Handler) handleListPeriods(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
 		return
 	}
 	page := shared.ParsePagination(r, 100, 500)
@@ -316,6 +332,9 @@ func (h *Handler) handleListInputs(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
 		return
 	}
 
@@ -669,7 +688,9 @@ func (h *Handler) handleListPayslips(w http.ResponseWriter, r *http.Request) {
 	}
 	if employeeID == "" {
 		if id, err := h.Service.FindEmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err != nil {
-			slog.Warn("payslip list employee lookup failed", "err", err)
+			if !isNoRowsError(err) {
+				slog.Warn("payslip list employee lookup failed", "err", err)
+			}
 		} else {
 			employeeID = id
 		}
@@ -871,6 +892,9 @@ func (h *Handler) handleListAdjustments(w http.ResponseWriter, r *http.Request) 
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
+		return
+	}
 
 	periodID := chi.URLParam(r, "periodID")
 	employeeFilter := ""
@@ -1023,6 +1047,9 @@ func (h *Handler) handleExportRegister(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
+		return
+	}
 
 	periodID := chi.URLParam(r, "periodID")
 	rows, err := h.Service.RegisterRows(r.Context(), user.TenantID, periodID)
@@ -1052,6 +1079,9 @@ func (h *Handler) handleExportJournal(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUser(r.Context())
 	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
+		return
+	}
+	if denyEmployeePayrollOperations(w, r, user.RoleName) {
 		return
 	}
 
@@ -1218,4 +1248,16 @@ func nullIfEmpty(value string) any {
 		return nil
 	}
 	return value
+}
+
+func denyEmployeePayrollOperations(w http.ResponseWriter, r *http.Request, roleName string) bool {
+	if roleName != auth.RoleEmployee {
+		return false
+	}
+	api.Fail(w, http.StatusForbidden, "forbidden", "employee can only access own payslips", middleware.GetRequestID(r.Context()))
+	return true
+}
+
+func isNoRowsError(err error) bool {
+	return errors.Is(err, pgx.ErrNoRows)
 }

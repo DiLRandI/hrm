@@ -48,7 +48,7 @@ func (h *Handler) handleEmployeeDashboard(w http.ResponseWriter, r *http.Request
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != auth.RoleEmployee && user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleEmployee && user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -98,14 +98,22 @@ func (h *Handler) handleManagerDashboard(w http.ResponseWriter, r *http.Request)
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "manager or hr required", middleware.GetRequestID(r.Context()))
 		return
 	}
 
-	managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-	if err != nil {
-		slog.Warn("manager employee lookup failed", "err", err)
+	managerEmployeeID := ""
+	var err error
+	if user.RoleName == auth.RoleManager {
+		managerEmployeeID, err = h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+		if err != nil {
+			slog.Warn("manager employee lookup failed", "err", err)
+		}
+		if managerEmployeeID == "" {
+			api.Success(w, reports.ManagerDashboard(0, 0, 0), middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 
 	var pendingApprovals int
@@ -145,7 +153,7 @@ func (h *Handler) handleHRDashboard(w http.ResponseWriter, r *http.Request) {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -223,10 +231,18 @@ func (h *Handler) handleExportManagerDashboard(w http.ResponseWriter, r *http.Re
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
-	if err != nil {
-		api.Fail(w, http.StatusInternalServerError, "export_failed", "failed to export dashboard", middleware.GetRequestID(r.Context()))
+	if user.RoleName != auth.RoleManager && user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
+		api.Fail(w, http.StatusForbidden, "forbidden", "manager or hr required", middleware.GetRequestID(r.Context()))
 		return
+	}
+	managerEmployeeID := ""
+	var err error
+	if user.RoleName == auth.RoleManager {
+		managerEmployeeID, err = h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+		if err != nil || managerEmployeeID == "" {
+			api.Fail(w, http.StatusForbidden, "forbidden", "manager profile is not configured", middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 
 	var pendingApprovals int
@@ -269,7 +285,7 @@ func (h *Handler) handleExportHRDashboard(w http.ResponseWriter, r *http.Request
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}

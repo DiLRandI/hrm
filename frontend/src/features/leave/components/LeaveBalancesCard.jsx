@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function LeaveBalancesCard({ balances, typeLookup }) {
+export default function LeaveBalancesCard({ balances, typeLookup, employeeNameById = {} }) {
   return (
     <div className="card">
       <h3>Balances</h3>
@@ -14,7 +14,7 @@ export default function LeaveBalancesCard({ balances, typeLookup }) {
         </div>
         {balances.map((row) => (
           <div key={`${row.employeeId}-${row.leaveTypeId}`} className="table-row">
-            <span>{row.employeeId}</span>
+            <span>{employeeNameById[row.employeeId] || row.employeeId}</span>
             <span>{typeLookup[row.leaveTypeId] || row.leaveTypeId}</span>
             <span>{row.balance}</span>
             <span>{row.pending}</span>

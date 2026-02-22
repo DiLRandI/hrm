@@ -187,6 +187,10 @@ func (s *Store) AdjustBalance(ctx context.Context, tenantID, employeeID, leaveTy
 }
 
 func (s *Store) ListRequests(ctx context.Context, tenantID, roleName, employeeID, managerEmployeeID string, limit, offset int) (RequestListResult, error) {
+	if roleName == auth.RoleManager && managerEmployeeID == "" {
+		return RequestListResult{Requests: []LeaveRequest{}, Total: 0}, nil
+	}
+
 	query := `
     SELECT id, employee_id, leave_type_id, start_date, end_date, start_half, end_half, days, reason, status, created_at
     FROM leave_requests

@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function LeaveCalendarCard({ calendar, typeLookup, onExport, disabled }) {
+export default function LeaveCalendarCard({ calendar, typeLookup, employeeNameById = {}, onExport, disabled }) {
   return (
     <div className="card">
       <h3>Calendar</h3>
@@ -17,7 +17,7 @@ export default function LeaveCalendarCard({ calendar, typeLookup, onExport, disa
         </div>
         {calendar.map((item) => (
           <div key={item.id} className="table-row">
-            <span>{item.employeeId}</span>
+            <span>{employeeNameById[item.employeeId] || item.employeeId}</span>
             <span>{typeLookup[item.leaveTypeId] || item.leaveTypeId}</span>
             <span>{item.start?.slice(0, 10)} → {item.end?.slice(0, 10)}</span>
             <span>{item.status}</span>

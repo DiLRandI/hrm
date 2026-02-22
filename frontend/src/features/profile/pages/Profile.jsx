@@ -20,6 +20,7 @@ export default function Profile() {
   const [saving, setSaving] = useState(false);
   const [contacts, setContacts] = useState([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  const hasEmployeeProfile = Boolean(employee?.id);
 
   const [form, setForm] = useState({
     preferredName: '',
@@ -50,21 +51,34 @@ export default function Profile() {
   }, [employee]);
 
   const loadContacts = async () => {
+    if (!hasEmployeeProfile) {
+      setContacts([]);
+      return;
+    }
     setContactsLoading(true);
     setError('');
     try {
       const data = await api.get('/profile/emergency-contacts');
       setContacts(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError(err.message);
+      if (err.message === 'employee not found') {
+        setContacts([]);
+      } else {
+        setError(err.message);
+      }
     } finally {
       setContactsLoading(false);
     }
   };
 
   useEffect(() => {
+    if (!hasEmployeeProfile) {
+      setContacts([]);
+      setContactsLoading(false);
+      return;
+    }
     loadContacts();
-  }, []);
+  }, [hasEmployeeProfile]);
 
   const profilePayload = useMemo(() => {
     if (!employee) {
@@ -84,6 +98,7 @@ export default function Profile() {
   const saveProfile = async (e) => {
     e.preventDefault();
     if (!employee || !profilePayload) {
+      setMessage('Profile details are unavailable for this account.');
       return;
     }
     setSaving(true);
@@ -101,6 +116,10 @@ export default function Profile() {
   };
 
   const saveContacts = async () => {
+    if (!hasEmployeeProfile) {
+      setMessage('Emergency contacts are available once an employee profile exists.');
+      return;
+    }
     setSaving(true);
     setMessage('');
     setError('');
@@ -136,7 +155,7 @@ export default function Profile() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<Navigate to="overview" replace />} />
+	        <Route path="/" element={<Navigate to="/profile/overview" replace />} />
         <Route
           path="overview"
           element={
@@ -166,6 +185,7 @@ export default function Profile() {
           element={
             <form className="stack card" onSubmit={saveProfile}>
               <h3>Personal details</h3>
+              {!hasEmployeeProfile && <p className="hint">Employee profile is not linked to this account.</p>}
               <input
                 placeholder="Preferred name"
                 value={form.preferredName}
@@ -181,7 +201,7 @@ export default function Profile() {
                 value={form.dateOfBirth}
                 onChange={(e) => setForm({ ...form, dateOfBirth: e.target.value })}
               />
-              <button type="submit" disabled={saving}>Save personal</button>
+              <button type="submit" disabled={saving || !hasEmployeeProfile}>Save personal</button>
             </form>
           }
         />
@@ -190,6 +210,7 @@ export default function Profile() {
           element={
             <form className="stack card" onSubmit={saveProfile}>
               <h3>Contact info</h3>
+              {!hasEmployeeProfile && <p className="hint">Employee profile is not linked to this account.</p>}
               <input
                 placeholder="Personal email"
                 value={form.personalEmail}
@@ -205,7 +226,7 @@ export default function Profile() {
                 value={form.address}
                 onChange={(e) => setForm({ ...form, address: e.target.value })}
               />
-              <button type="submit" disabled={saving}>Save contact</button>
+              <button type="submit" disabled={saving || !hasEmployeeProfile}>Save contact</button>
             </form>
           }
         />
@@ -214,7 +235,9 @@ export default function Profile() {
           element={
             <div className="card stack">
               <h3>Emergency contacts</h3>
-              {contactsLoading ? (
+              {!hasEmployeeProfile ? (
+                <p className="hint">Employee profile is not linked to this account.</p>
+              ) : contactsLoading ? (
                 <p className="hint">Loading contacts…</p>
               ) : (
                 contacts.map((contact, idx) => (
@@ -289,10 +312,15 @@ export default function Profile() {
                 ))
               )}
               <div className="row-actions">
-                <button type="button" className="ghost" onClick={() => setContacts([...contacts, emptyContact()])}>
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => setContacts([...contacts, emptyContact()])}
+                  disabled={!hasEmployeeProfile}
+                >
                   Add contact
                 </button>
-                <button type="button" onClick={saveContacts} disabled={saving}>
+                <button type="button" onClick={saveContacts} disabled={saving || !hasEmployeeProfile}>
                   Save contacts
                 </button>
               </div>
@@ -379,7 +407,7 @@ export default function Profile() {
             </div>
           }
         />
-        <Route path="*" element={<Navigate to="overview" replace />} />
+	        <Route path="*" element={<Navigate to="/profile/overview" replace />} />
       </Routes>
     </section>
   );

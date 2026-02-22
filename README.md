@@ -12,6 +12,8 @@ Default seeded users (when `RUN_SEED=true`):
 - System admin (required for first bootstrap): `SEED_SYSTEM_ADMIN_EMAIL` / `SEED_SYSTEM_ADMIN_PASSWORD`
 - HR admin (optional): `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`
 
+Bootstrap also seeds a baseline leave setup (`Annual Leave` type + default monthly policy) so leave requests work on first run.
+
 ## Local Development
 
 Backend:

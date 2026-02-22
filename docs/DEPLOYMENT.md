@@ -57,7 +57,8 @@ docker compose up --build
 - `ALLOW_SELF_SIGNUP` is loaded by config but currently not used by any active auth/signup route.
 
 ## Role Provisioning Model
-- Bootstrap seed ensures role catalog: `SystemAdmin`, `HR`, `HRManager`, `Manager`, `Employee`.
+- Bootstrap seed ensures role catalog: `SystemAdmin`, `Admin`, `HR`, `HRManager`, `Manager`, `Employee`.
+- Bootstrap seed also ensures a baseline leave configuration (`Annual Leave` type + default monthly policy) so first-run leave requests are immediately usable.
 - Ongoing user provisioning is API-driven (`/api/v1/users`) with role-creation policy checks.
 
 ## Kubernetes Notes

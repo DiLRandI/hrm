@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"hrm/internal/domain/auth"
 	"hrm/internal/transport/http/api"
 )
 
@@ -24,6 +25,13 @@ func RequirePermission(permission string, store PermissionStore) func(http.Handl
 			if err != nil {
 				api.Fail(w, http.StatusInternalServerError, "permission_error", "permission check failed", GetRequestID(r.Context()))
 				return
+			}
+			if !allowed {
+				allowed, err = store.HasPermission(r.Context(), user.RoleID, auth.PermSystemAdmin)
+				if err != nil {
+					api.Fail(w, http.StatusInternalServerError, "permission_error", "permission check failed", GetRequestID(r.Context()))
+					return
+				}
 			}
 			if !allowed {
 				api.Fail(w, http.StatusForbidden, "forbidden", "insufficient permissions", GetRequestID(r.Context()))

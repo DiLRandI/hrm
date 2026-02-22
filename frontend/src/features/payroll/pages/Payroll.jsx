@@ -25,6 +25,13 @@ const downloadBlob = ({ blob, filename }) => {
   URL.revokeObjectURL(url);
 };
 
+const createIdempotencyKey = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `payroll-finalize-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+};
+
 export default function Payroll() {
   const { user, employee } = useAuth();
   const isHR = getRole(user) === ROLE_HR;
@@ -90,10 +97,34 @@ export default function Payroll() {
     }, {});
   }, [elements]);
 
+  const periodLabelLookup = useMemo(() => {
+    return periods.reduce((acc, period) => {
+      const start = period.startDate ? String(period.startDate).slice(0, 10) : '';
+      const end = period.endDate ? String(period.endDate).slice(0, 10) : '';
+      acc[period.id] = start && end ? `${start} -> ${end}` : period.id;
+      return acc;
+    }, {});
+  }, [periods]);
+
   const loadBase = async () => {
     setError('');
     try {
       const payslipPath = employee?.id ? `/payroll/payslips?employeeId=${employee.id}` : '/payroll/payslips';
+      if (!isHR) {
+        const slips = await api.get(payslipPath);
+        setSchedules([]);
+        setGroups([]);
+        setElements([]);
+        setJournalTemplates([]);
+        setPeriods([]);
+        setInputs([]);
+        setAdjustments([]);
+        setSummary(null);
+        setSelectedPeriodId('');
+        setPayslips(Array.isArray(slips) ? slips : []);
+        return;
+      }
+
       const results = await Promise.allSettled([
         api.get('/payroll/schedules'),
         api.get('/payroll/groups'),
@@ -162,7 +193,7 @@ export default function Payroll() {
 
   useEffect(() => {
     loadBase();
-  }, [employee]);
+  }, [employee, isHR]);
 
   useEffect(() => {
     if (activeSection === 'run') {
@@ -273,7 +304,9 @@ export default function Payroll() {
 
   const finalizePayroll = async (id) => {
     try {
-      await api.post(`/payroll/periods/${id}/finalize`, {});
+      await api.post(`/payroll/periods/${id}/finalize`, {}, {
+        headers: { 'Idempotency-Key': createIdempotencyKey() },
+      });
       await loadBase();
       await loadPeriodDetails(id);
     } catch (err) {
@@ -410,13 +443,13 @@ export default function Payroll() {
 
       <nav className="subnav">
         <NavLink to="/payroll/overview">Overview</NavLink>
-        <NavLink to="/payroll/run">Run payroll</NavLink>
+        {isHR && <NavLink to="/payroll/run">Run payroll</NavLink>}
         {isHR && <NavLink to="/payroll/setup">Setup</NavLink>}
         <NavLink to="/payroll/payslips">Payslips</NavLink>
       </nav>
 
       <Routes>
-        <Route path="/" element={<Navigate to="overview" replace />} />
+	        <Route path="/" element={<Navigate to="/payroll/overview" replace />} />
         <Route
           path="overview"
           element={
@@ -450,7 +483,8 @@ export default function Payroll() {
         <Route
           path="run"
           element={
-            <>
+            isHR ? (
+              <>
               {isHR && (
                 <form className="inline-form" onSubmit={createPeriod}>
                   <select
@@ -679,7 +713,10 @@ export default function Payroll() {
                   )}
                 </div>
               )}
-            </>
+              </>
+            ) : (
+              <Navigate to="/payroll/payslips" replace />
+            )
           }
         />
         {isHR && (
@@ -889,7 +926,7 @@ export default function Payroll() {
                 </div>
                 {payslips.map((slip) => (
                   <div key={slip.id} className="table-row">
-                    <span>{slip.periodId}</span>
+                    <span>{periodLabelLookup[slip.periodId] || slip.periodId}</span>
                     <span>{slip.net}</span>
                     <span>{slip.currency}</span>
                     <span className="row-actions">
@@ -902,7 +939,7 @@ export default function Payroll() {
             </>
           }
         />
-        <Route path="*" element={<Navigate to="overview" replace />} />
+	        <Route path="*" element={<Navigate to="/payroll/overview" replace />} />
       </Routes>
     </section>
   );

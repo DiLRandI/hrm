@@ -3,9 +3,12 @@ import { LEAVE_STATUS_PENDING, LEAVE_STATUS_PENDING_HR } from '../../../shared/c
 
 export default function LeaveRequestsCard({
   types,
+  employeeOptions = [],
+  employeeNameById = {},
   typeLookup,
   requests,
   requestForm,
+  showEmployeeSelector,
   onFormChange,
   onDocumentsChange,
   onSubmit,
@@ -22,6 +25,20 @@ export default function LeaveRequestsCard({
     <div className="card">
       <h3>Request Leave</h3>
       <form className="inline-form" onSubmit={onSubmit} aria-label="Request leave">
+        {showEmployeeSelector && (
+          <select
+            aria-label="Employee"
+            value={requestForm.employeeId}
+            onChange={(e) => onFormChange('employeeId', e.target.value)}
+          >
+            <option value="">Employee</option>
+            {employeeOptions.map((employee) => (
+              <option key={employee.id} value={employee.id}>
+                {`${employee.firstName || ''} ${employee.lastName || ''}`.trim() || employee.email || employee.id}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           aria-label="Leave type"
           value={requestForm.leaveTypeId}
@@ -90,7 +107,7 @@ export default function LeaveRequestsCard({
         </div>
         {requests.map((req) => (
           <div key={req.id} className="table-row">
-            <span>{req.employeeId}</span>
+            <span>{employeeNameById[req.employeeId] || req.employeeId}</span>
             <span>{typeLookup[req.leaveTypeId] || req.leaveTypeId}</span>
             <span>
               {req.startDate?.slice(0, 10)} {req.startHalf ? '(half)' : '(full)'} → {req.endDate?.slice(0, 10)}{' '}

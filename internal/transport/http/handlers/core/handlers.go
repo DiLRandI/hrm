@@ -3,12 +3,14 @@ package corehandler
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
@@ -104,18 +106,27 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employees, err := h.Service.ListEmployees(r.Context(), user.TenantID)
-	if err != nil {
-		api.Fail(w, http.StatusInternalServerError, "employee_list_failed", "failed to list employees", middleware.GetRequestID(r.Context()))
-		return
-	}
-
+	requestID := middleware.GetRequestID(r.Context())
 	var managerEmployeeID string
 	if user.RoleName == auth.RoleManager {
 		managerEmp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
-		if err == nil {
+		if err != nil {
+			slog.Warn("employee list manager lookup failed", "err", err)
+		}
+		if managerEmp != nil {
 			managerEmployeeID = managerEmp.ID
 		}
+		if managerEmployeeID == "" {
+			w.Header().Set("X-Total-Count", "0")
+			api.Success(w, []core.Employee{}, requestID)
+			return
+		}
+	}
+
+	employees, err := h.Service.ListEmployees(r.Context(), user.TenantID)
+	if err != nil {
+		api.Fail(w, http.StatusInternalServerError, "employee_list_failed", "failed to list employees", requestID)
+		return
 	}
 
 	filtered := make([]core.Employee, 0, len(employees))
@@ -138,7 +149,7 @@ func (h *Handler) handleListEmployees(w http.ResponseWriter, r *http.Request) {
 	start := min(page.Offset, total)
 	end := min(start+page.Limit, total)
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	api.Success(w, filtered[start:end], middleware.GetRequestID(r.Context()))
+	api.Success(w, filtered[start:end], requestID)
 }
 
 func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
@@ -159,9 +170,13 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("access log insert failed", "err", err)
 	}
 
-	managerEmp, err := h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
-	if err != nil {
-		slog.Warn("manager lookup failed", "err", err)
+	var managerEmp *core.Employee
+	if user.RoleName == auth.RoleManager {
+		var err error
+		managerEmp, err = h.Service.GetEmployeeByUserID(r.Context(), user.TenantID, user.UserID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			slog.Warn("manager lookup failed", "err", err)
+		}
 	}
 	isSelf := emp.UserID == user.UserID
 	isManager := managerEmp != nil && emp.ManagerID == managerEmp.ID
@@ -497,6 +512,12 @@ func (h *Handler) handleOrgChart(w http.ResponseWriter, r *http.Request) {
 	if user.RoleName == auth.RoleEmployee || user.RoleName == auth.RoleManager {
 		if id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err == nil {
 			employeeID = id
+		} else {
+			slog.Warn("org chart self employee lookup failed", "err", err)
+		}
+		if employeeID == "" {
+			api.Success(w, []map[string]any{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 	nodes, err := h.Service.OrgChartNodes(r.Context(), user.TenantID, employeeID)

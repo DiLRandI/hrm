@@ -107,6 +107,13 @@ var RolePermissions = map[string][]string{
 		PermGDPRRetention,
 		PermAuditRead,
 	},
+	RoleAdmin: {
+		PermEmployeesRead,
+		PermEmployeesWrite,
+		PermOrgRead,
+		PermOrgWrite,
+		PermAuditRead,
+	},
 	RoleSystemAdmin: {
 		PermSystemAdmin,
 	},

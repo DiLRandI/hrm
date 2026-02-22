@@ -44,6 +44,7 @@ export default function Leave() {
   const [actionError, setActionError] = useState('');
 
   const [requestForm, setRequestForm] = useState({
+    employeeId: '',
     leaveTypeId: '',
     startDate: '',
     endDate: '',
@@ -81,8 +82,15 @@ export default function Leave() {
 
   const fetchLeaveData = useCallback(
     async ({ signal }) => {
+      const needsEmployeeOptions =
+        (isHR || isManager) &&
+        (activeSection === 'requests' ||
+          activeSection === 'balances' ||
+          activeSection === 'holidays' ||
+          activeSection === 'reports');
       const needs = {
         types: true,
+        employeeOptions: needsEmployeeOptions,
         policies: activeSection === 'policies',
         balances: activeSection === 'balances',
         holidays: activeSection === 'holidays',
@@ -93,6 +101,7 @@ export default function Leave() {
 
       const result = {
         types: [],
+        employeeOptions: [],
         policies: [],
         balances: [],
         holidays: [],
@@ -107,6 +116,13 @@ export default function Leave() {
         requests.push(
           api.get('/leave/types', { signal }).then((data) => {
             result.types = normalizeArray(data);
+          }),
+        );
+      }
+      if (needs.employeeOptions) {
+        requests.push(
+          api.get('/employees?limit=500&offset=0', { signal }).then((data) => {
+            result.employeeOptions = normalizeArray(data);
           }),
         );
       }
@@ -156,7 +172,7 @@ export default function Leave() {
       await Promise.all(requests);
       return result;
     },
-    [activeSection],
+    [activeSection, isHR, isManager],
   );
 
   const {
@@ -167,6 +183,7 @@ export default function Leave() {
   } = useApiQuery(fetchLeaveData, [activeSection], {
     initialData: {
       types: [],
+      employeeOptions: [],
       policies: [],
       balances: [],
       holidays: [],
@@ -206,6 +223,19 @@ export default function Leave() {
     }, {});
   }, [leaveData.types]);
 
+  const employeeNameById = useMemo(() => {
+    const byID = {};
+    leaveData.employeeOptions.forEach((item) => {
+      const fullName = `${item.firstName || ''} ${item.lastName || ''}`.trim();
+      byID[item.id] = fullName || item.email || item.id;
+    });
+    if (employee?.id && !byID[employee.id]) {
+      const fullName = `${employee.firstName || ''} ${employee.lastName || ''}`.trim();
+      byID[employee.id] = fullName || employee.email || employee.id;
+    }
+    return byID;
+  }, [leaveData.employeeOptions, employee]);
+
   const reloadAll = async () => {
     await Promise.all([reloadLeave(), reloadRequests()]);
   };
@@ -228,11 +258,14 @@ export default function Leave() {
       setActionError('Supporting document is required for the selected leave type.');
       return;
     }
+    const requestEmployeeID = isHR ? (requestForm.employeeId || employee?.id || '') : (employee?.id || '');
+    if (!requestEmployeeID) {
+      setActionError('Select an employee for this leave request.');
+      return;
+    }
 
     const formData = new FormData();
-    if (employee?.id) {
-      formData.append('employeeId', employee.id);
-    }
+    formData.append('employeeId', requestEmployeeID);
     formData.append('leaveTypeId', requestForm.leaveTypeId);
     formData.append('startDate', requestForm.startDate);
     formData.append('endDate', requestForm.endDate);
@@ -246,6 +279,7 @@ export default function Leave() {
     try {
       await api.postForm('/leave/requests', formData);
       setRequestForm({
+        employeeId: '',
         leaveTypeId: '',
         startDate: '',
         endDate: '',
@@ -433,7 +467,7 @@ export default function Leave() {
       )}
 
       <Routes>
-        <Route path="/" element={<Navigate to="requests" replace />} />
+	        <Route path="/" element={<Navigate to="/leave/requests" replace />} />
         <Route
           path="requests"
           element={
@@ -443,6 +477,9 @@ export default function Leave() {
                 typeLookup={typeLookup}
                 requests={requests}
                 requestForm={requestForm}
+                employeeOptions={leaveData.employeeOptions}
+                employeeNameById={employeeNameById}
+                showEmployeeSelector={isHR}
                 onFormChange={(field, value) => setRequestForm((prev) => ({ ...prev, [field]: value }))}
                 onDocumentsChange={(files) => setRequestForm((prev) => ({ ...prev, documents: files }))}
                 onSubmit={submitRequest}
@@ -494,7 +531,11 @@ export default function Leave() {
                 />
               ) : (
                 <div className="card-grid">
-                  <LeaveBalancesCard balances={leaveData.balances} typeLookup={typeLookup} />
+                  <LeaveBalancesCard
+                    balances={leaveData.balances}
+                    typeLookup={typeLookup}
+                    employeeNameById={employeeNameById}
+                  />
                   {isHR && (
                     <LeaveAdjustCard
                       types={leaveData.types}
@@ -550,6 +591,7 @@ export default function Leave() {
                 <LeaveCalendarCard
                   calendar={leaveData.calendar}
                   typeLookup={typeLookup}
+                  employeeNameById={employeeNameById}
                   onExport={exportCalendar}
                   disabled={loading}
                 />
@@ -565,11 +607,12 @@ export default function Leave() {
                 balanceReport={leaveData.balanceReport}
                 usageReport={leaveData.usageReport}
                 typeLookup={typeLookup}
+                employeeNameById={employeeNameById}
               />
             }
           />
         )}
-        <Route path="*" element={<Navigate to="requests" replace />} />
+	        <Route path="*" element={<Navigate to="/leave/requests" replace />} />
       </Routes>
     </section>
   );

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
-import { ROLE_HR, ROLE_MANAGER } from '../../../shared/constants/roles.js';
+import { ROLE_ADMIN, ROLE_HR, ROLE_HR_MANAGER, ROLE_MANAGER, ROLE_SYSTEM_ADMIN } from '../../../shared/constants/roles.js';
 import { getRole } from '../../../shared/utils/role.js';
 
 const downloadBlob = ({ blob, filename }) => {
@@ -17,8 +17,21 @@ const downloadBlob = ({ blob, filename }) => {
 export default function Reports() {
   const { user } = useAuth();
   const role = getRole(user);
-  const isHR = role === ROLE_HR;
+  const isHR = role === ROLE_HR || role === ROLE_HR_MANAGER;
   const isManager = role === ROLE_MANAGER;
+  const isAdminWorkspace = role === ROLE_SYSTEM_ADMIN || role === ROLE_ADMIN;
+  const dashboardPath = useMemo(() => {
+    if (isHR) {
+      return '/reports/dashboard/hr';
+    }
+    if (isManager) {
+      return '/reports/dashboard/manager';
+    }
+    if (isAdminWorkspace) {
+      return '';
+    }
+    return '/reports/dashboard/employee';
+  }, [isHR, isManager, isAdminWorkspace]);
   const location = useLocation();
   const activeSection = useMemo(() => {
     const segment = location.pathname.split('/')[2];
@@ -37,12 +50,10 @@ export default function Reports() {
   useEffect(() => {
     const load = async () => {
       try {
-        if (isHR) {
-          setData(await api.get('/reports/dashboard/hr'));
-        } else if (isManager) {
-          setData(await api.get('/reports/dashboard/manager'));
+        if (dashboardPath) {
+          setData(await api.get(dashboardPath));
         } else {
-          setData(await api.get('/reports/dashboard/employee'));
+          setData(null);
         }
         if (isHR && activeSection === 'jobs') {
           const params = new URLSearchParams();
@@ -62,7 +73,7 @@ export default function Reports() {
       }
     };
     load();
-  }, [role, isHR, isManager, jobFilter, statusFilter, startedFrom, startedTo, activeSection]);
+  }, [dashboardPath, isHR, jobFilter, statusFilter, startedFrom, startedTo, activeSection]);
 
   const viewRunDetails = async (runId) => {
     try {
@@ -78,7 +89,13 @@ export default function Reports() {
         ? '/reports/dashboard/hr/export'
         : isManager
           ? '/reports/dashboard/manager/export'
-          : '/reports/dashboard/employee/export';
+          : isAdminWorkspace
+            ? ''
+            : '/reports/dashboard/employee/export';
+      if (!path) {
+        setError('Dashboard export is not available for this role');
+        return;
+      }
       const result = await api.download(path);
       downloadBlob(result);
     } catch (err) {
@@ -103,7 +120,7 @@ export default function Reports() {
           <h2>Reports</h2>
           <p>Role-specific reporting snapshots with export-ready data.</p>
         </div>
-        <button type="button" onClick={exportDashboard}>Export CSV</button>
+        {!isAdminWorkspace && <button type="button" onClick={exportDashboard}>Export CSV</button>}
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -114,7 +131,7 @@ export default function Reports() {
       </nav>
 
       <Routes>
-        <Route path="/" element={<Navigate to="overview" replace />} />
+	        <Route path="/" element={<Navigate to="/reports/overview" replace />} />
         <Route
           path="overview"
           element={
@@ -203,7 +220,7 @@ export default function Reports() {
             }
           />
         )}
-        <Route path="*" element={<Navigate to="overview" replace />} />
+	        <Route path="*" element={<Navigate to="/reports/overview" replace />} />
       </Routes>
     </section>
   );

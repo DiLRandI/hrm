@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function LeaveReportsGrid({ balanceReport, usageReport, typeLookup }) {
+export default function LeaveReportsGrid({ balanceReport, usageReport, typeLookup, employeeNameById = {} }) {
   return (
     <div className="card-grid">
       <div className="card">
@@ -15,7 +15,7 @@ export default function LeaveReportsGrid({ balanceReport, usageReport, typeLooku
           </div>
           {balanceReport.map((row) => (
             <div key={`${row.employeeId}-${row.leaveTypeId}`} className="table-row">
-              <span>{row.employeeId}</span>
+              <span>{employeeNameById[row.employeeId] || row.employeeId}</span>
               <span>{typeLookup[row.leaveTypeId] || row.leaveTypeId}</span>
               <span>{row.balance}</span>
               <span>{row.pending}</span>

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 
 	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
@@ -275,7 +276,9 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 		if id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err == nil {
 			selfEmployeeID = id
 		} else {
-			slog.Warn("leave balances self employee lookup failed", "err", err)
+			if !errors.Is(err, pgx.ErrNoRows) {
+				slog.Warn("leave balances self employee lookup failed", "err", err)
+			}
 		}
 	}
 
@@ -283,6 +286,10 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 	case auth.RoleEmployee:
 		employeeID = selfEmployeeID
 	case auth.RoleManager:
+		if selfEmployeeID == "" {
+			api.Fail(w, http.StatusForbidden, "forbidden", "manager profile is not configured", middleware.GetRequestID(r.Context()))
+			return
+		}
 		if employeeID == "" {
 			employeeID = selfEmployeeID
 		}
@@ -298,7 +305,12 @@ func (h *Handler) handleListBalances(w http.ResponseWriter, r *http.Request) {
 		}
 	case auth.RoleHR:
 		if employeeID == "" {
-			api.Fail(w, http.StatusBadRequest, "invalid_request", "employee id required", middleware.GetRequestID(r.Context()))
+			report, err := h.Service.ReportBalances(r.Context(), user.TenantID)
+			if err != nil {
+				api.Fail(w, http.StatusInternalServerError, "leave_balances_failed", "failed to list balances", middleware.GetRequestID(r.Context()))
+				return
+			}
+			api.Success(w, report, middleware.GetRequestID(r.Context()))
 			return
 		}
 	}
@@ -425,12 +437,22 @@ func (h *Handler) handleListRequests(w http.ResponseWriter, r *http.Request) {
 		} else {
 			slog.Warn("leave requests employee lookup failed", "err", err)
 		}
+		if employeeID == "" {
+			w.Header().Set("X-Total-Count", "0")
+			api.Success(w, []leave.LeaveRequest{}, middleware.GetRequestID(r.Context()))
+			return
+		}
 	}
 	if user.RoleName == auth.RoleManager {
 		if id, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID); err == nil {
 			managerEmployeeID = id
 		} else {
 			slog.Warn("leave requests manager lookup failed", "err", err)
+		}
+		if managerEmployeeID == "" {
+			w.Header().Set("X-Total-Count", "0")
+			api.Success(w, []leave.LeaveRequest{}, middleware.GetRequestID(r.Context()))
+			return
 		}
 	}
 

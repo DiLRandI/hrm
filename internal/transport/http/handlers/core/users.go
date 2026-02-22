@@ -84,11 +84,15 @@ func (h *Handler) handleCreateUser(w http.ResponseWriter, r *http.Request) {
 	validator := shared.NewValidator()
 	validator.Required("email", payload.Email, "is required")
 	if roleName == "" {
-		validator.Add("role", "must be one of: Employee, Manager, HRManager, HR, SystemAdmin")
+		validator.Add("role", "must be one of: Employee, Manager, HRManager, HR, Admin, SystemAdmin")
 	}
 	validator.Enum("status", status, []string{core.UserStatusActive, core.UserStatusDisabled}, "must be one of: active, disabled")
-	if roleName == auth.RoleEmployee && payload.Employee == nil {
-		validator.Add("employee", "is required for Employee role onboarding")
+	if requiresEmployeeProfile(roleName) && payload.Employee == nil {
+		validator.Add("employee", "is required for Employee or Manager role onboarding")
+	}
+	if requiresEmployeeProfile(roleName) && payload.Employee != nil {
+		validator.Required("employee.firstName", strings.TrimSpace(payload.Employee.FirstName), "is required")
+		validator.Required("employee.lastName", strings.TrimSpace(payload.Employee.LastName), "is required")
 	}
 	if validator.Reject(w, middleware.GetRequestID(r.Context())) {
 		return
@@ -169,7 +173,7 @@ func (h *Handler) handleUpdateUserRole(w http.ResponseWriter, r *http.Request) {
 	roleName := normalizeRoleName(payload.Role)
 	if roleName == "" {
 		shared.FailValidation(w, middleware.GetRequestID(r.Context()), []shared.ValidationIssue{
-			{Field: "role", Reason: "must be one of: Employee, Manager, HRManager, HR, SystemAdmin"},
+			{Field: "role", Reason: "must be one of: Employee, Manager, HRManager, HR, Admin, SystemAdmin"},
 		})
 		return
 	}
@@ -268,6 +272,8 @@ func normalizeRoleName(role string) string {
 		return auth.RoleHRManager
 	case strings.ToLower(auth.RoleHR):
 		return auth.RoleHR
+	case strings.ToLower(auth.RoleAdmin):
+		return auth.RoleAdmin
 	case strings.ToLower(auth.RoleSystemAdmin), "system_admin", "system-admin":
 		return auth.RoleSystemAdmin
 	default:
@@ -276,13 +282,15 @@ func normalizeRoleName(role string) string {
 }
 
 func canListUsers(actorRole string) bool {
-	return actorRole == auth.RoleSystemAdmin || actorRole == auth.RoleHRManager || actorRole == auth.RoleHR
+	return actorRole == auth.RoleSystemAdmin || actorRole == auth.RoleAdmin || actorRole == auth.RoleHRManager || actorRole == auth.RoleHR
 }
 
 func canCreateRole(actorRole, targetRole string) bool {
 	switch actorRole {
 	case auth.RoleSystemAdmin:
-		return targetRole == auth.RoleHR || targetRole == auth.RoleHRManager || targetRole == auth.RoleManager
+		return targetRole == auth.RoleAdmin || targetRole == auth.RoleHR || targetRole == auth.RoleHRManager || targetRole == auth.RoleManager
+	case auth.RoleAdmin:
+		return targetRole == auth.RoleHRManager || targetRole == auth.RoleHR || targetRole == auth.RoleManager
 	case auth.RoleHRManager:
 		return targetRole == auth.RoleHR || targetRole == auth.RoleEmployee
 	case auth.RoleHR:
@@ -295,6 +303,8 @@ func canCreateRole(actorRole, targetRole string) bool {
 func canManageRole(actorRole, targetRole string) bool {
 	switch actorRole {
 	case auth.RoleSystemAdmin:
+		return targetRole == auth.RoleAdmin || targetRole == auth.RoleHR || targetRole == auth.RoleHRManager || targetRole == auth.RoleManager || targetRole == auth.RoleEmployee
+	case auth.RoleAdmin:
 		return targetRole == auth.RoleHR || targetRole == auth.RoleHRManager || targetRole == auth.RoleManager || targetRole == auth.RoleEmployee
 	case auth.RoleHRManager:
 		return targetRole == auth.RoleHR || targetRole == auth.RoleEmployee
@@ -303,4 +313,8 @@ func canManageRole(actorRole, targetRole string) bool {
 	default:
 		return false
 	}
+}
+
+func requiresEmployeeProfile(roleName string) bool {
+	return roleName == auth.RoleEmployee || roleName == auth.RoleManager
 }
