@@ -3,15 +3,12 @@ package corehandler
 import (
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"hrm/internal/domain/audit"
 	"hrm/internal/domain/auth"
@@ -39,7 +36,6 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 	r.Get("/org/chart", h.handleOrgChart)
 	r.Route("/employees", func(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/", h.handleListEmployees)
-		r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Service)).Post("/", h.handleCreateEmployee)
 		r.Route("/{employeeID}", func(r chi.Router) {
 			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/", h.handleGetEmployee)
 			r.Put("/", h.handleUpdateEmployee)
@@ -47,6 +43,12 @@ func (h *Handler) RegisterRoutes(r chi.Router) {
 			r.With(middleware.RequirePermission(auth.PermEmployeesWrite, h.Service)).Put("/emergency-contacts", h.handleReplaceEmployeeEmergencyContacts)
 			r.With(middleware.RequirePermission(auth.PermEmployeesRead, h.Service)).Get("/manager-history", h.handleManagerHistory)
 		})
+	})
+	r.Route("/users", func(r chi.Router) {
+		r.Get("/", h.handleListUsers)
+		r.Post("/", h.handleCreateUser)
+		r.Put("/{userID}/role", h.handleUpdateUserRole)
+		r.Put("/{userID}/status", h.handleUpdateUserStatus)
 	})
 	r.Route("/departments", func(r chi.Router) {
 		r.With(middleware.RequirePermission(auth.PermOrgRead, h.Service)).Get("/", h.handleListDepartments)
@@ -176,60 +178,6 @@ func (h *Handler) handleGetEmployee(w http.ResponseWriter, r *http.Request) {
 	api.Success(w, emp, middleware.GetRequestID(r.Context()))
 }
 
-func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
-	user, ok := middleware.GetUser(r.Context())
-	if !ok {
-		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
-		return
-	}
-	if user.RoleName != auth.RoleHR {
-		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
-		return
-	}
-
-	var payload core.Employee
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "invalid request payload", middleware.GetRequestID(r.Context()))
-		return
-	}
-	if strings.TrimSpace(payload.Email) == "" {
-		api.Fail(w, http.StatusBadRequest, "invalid_payload", "employee email required", middleware.GetRequestID(r.Context()))
-		return
-	}
-	if payload.Status == "" {
-		payload.Status = core.EmployeeStatusActive
-	}
-
-	tempPassword, err := generateTempPassword()
-	if err != nil {
-		api.Fail(w, http.StatusInternalServerError, "password_generate_failed", "failed to generate temporary password", middleware.GetRequestID(r.Context()))
-		return
-	}
-
-	id, _, err := h.Service.CreateEmployeeWithUser(r.Context(), user.TenantID, payload, tempPassword)
-	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			api.Fail(w, http.StatusConflict, "employee_exists", "employee email already exists", middleware.GetRequestID(r.Context()))
-			return
-		}
-		api.Fail(w, http.StatusInternalServerError, "employee_create_failed", "failed to create employee", middleware.GetRequestID(r.Context()))
-		return
-	}
-
-	if payload.ManagerID != "" {
-		if err := h.Service.CreateManagerRelation(r.Context(), id, payload.ManagerID); err != nil {
-			slog.Warn("manager relation insert failed", "err", err)
-		}
-	}
-
-	if err := h.Audit.Record(r.Context(), user.TenantID, user.UserID, "core.employee.create", "employee", id, middleware.GetRequestID(r.Context()), shared.ClientIP(r), nil, payload); err != nil {
-		slog.Warn("audit core.employee.create failed", "err", err)
-	}
-
-	api.Created(w, map[string]string{"id": id, "tempPassword": tempPassword}, middleware.GetRequestID(r.Context()))
-}
-
 const (
 	tempPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 	tempPasswordLength   = 12
@@ -269,7 +217,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		if existing.UserID != user.UserID {
 			api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
 			return
@@ -296,7 +244,7 @@ func (h *Handler) handleUpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.RoleName == auth.RoleHR && previousManagerID != payload.ManagerID {
+	if (user.RoleName == auth.RoleHR || user.RoleName == auth.RoleHRManager) && previousManagerID != payload.ManagerID {
 		if err := h.Service.CloseManagerRelations(r.Context(), employeeID); err != nil {
 			slog.Warn("manager relation close failed", "err", err)
 		}
@@ -384,7 +332,7 @@ func (h *Handler) handleListEmployeeEmergencyContacts(w http.ResponseWriter, r *
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -404,7 +352,7 @@ func (h *Handler) handleReplaceEmployeeEmergencyContacts(w http.ResponseWriter, 
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
-	if user.RoleName != auth.RoleHR {
+	if user.RoleName != auth.RoleHR && user.RoleName != auth.RoleHRManager {
 		api.Fail(w, http.StatusForbidden, "forbidden", "hr role required", middleware.GetRequestID(r.Context()))
 		return
 	}
@@ -560,13 +508,48 @@ func (h *Handler) handleOrgChart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleManagerHistory(w http.ResponseWriter, r *http.Request) {
-	if _, ok := middleware.GetUser(r.Context()); !ok {
+	user, ok := middleware.GetUser(r.Context())
+	if !ok {
 		api.Fail(w, http.StatusUnauthorized, "unauthorized", "authentication required", middleware.GetRequestID(r.Context()))
 		return
 	}
 
 	employeeID := chi.URLParam(r, "employeeID")
-	history, err := h.Service.ManagerHistory(r.Context(), employeeID)
+	targetEmployee, err := h.Service.GetEmployee(r.Context(), user.TenantID, employeeID)
+	if err != nil {
+		api.Fail(w, http.StatusNotFound, "not_found", "employee not found", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	allowed := false
+	switch user.RoleName {
+	case auth.RoleHR, auth.RoleHRManager:
+		allowed = true
+	case auth.RoleManager:
+		managerEmployeeID, err := h.Service.EmployeeIDByUserID(r.Context(), user.TenantID, user.UserID)
+		if err != nil {
+			slog.Warn("manager history manager lookup failed", "err", err)
+		}
+		if managerEmployeeID != "" {
+			if targetEmployee.UserID == user.UserID {
+				allowed = true
+			} else {
+				isManager, err := h.Service.IsManagerOf(r.Context(), user.TenantID, managerEmployeeID, employeeID)
+				if err != nil {
+					slog.Warn("manager history manager relation lookup failed", "err", err)
+				}
+				allowed = isManager
+			}
+		}
+	case auth.RoleEmployee:
+		allowed = targetEmployee.UserID == user.UserID
+	}
+	if !allowed {
+		api.Fail(w, http.StatusForbidden, "forbidden", "not allowed", middleware.GetRequestID(r.Context()))
+		return
+	}
+
+	history, err := h.Service.ManagerHistory(r.Context(), user.TenantID, employeeID)
 	if err != nil {
 		api.Fail(w, http.StatusInternalServerError, "manager_history_failed", "failed to load manager history", middleware.GetRequestID(r.Context()))
 		return

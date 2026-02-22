@@ -3,6 +3,9 @@
 Start: 2026-01-17
 
 ## Log
+- 2026-02-22: Removed legacy employee-create endpoint (`POST /employees`), migrated UI/test onboarding to `POST /users`, and consolidated account provisioning on the `/users` flow.
+- 2026-02-22: Implemented role rollout foundation with new `HRManager` role, hierarchical user provisioning APIs (`/users`), tenant-bound manager-history access checks, and seed bootstrap guard requiring a system admin on fresh installs.
+- 2026-02-22: Fixed password-reset audit insertion failures by normalizing empty actor/entity UUIDs to SQL `NULL` in audit event writes.
 - 2026-02-22: Refreshed repository documentation for command/API/deployment accuracy; archived completed immediate-priority checklist status; updated current gap analysis to reflect resolved vs active items.
 - 2026-01-17: Initialized project structure and documentation tracking.
 - 2026-01-17: Implemented encryption-at-rest for sensitive fields, MFA, refresh token rotation, audit log export UI, and GDPR consent/retention/anonymization flows with secure downloads.
@@ -25,5 +28,4 @@ Start: 2026-01-17
 - Payslip PDFs: render server-side HTML → PDF using a pluggable renderer (default: HTML download if no renderer configured).
 
 ## Pending
-- Strengthen manager-history tenant/role scoping (`GET /employees/{employeeID}/manager-history`) with tenant-bound queries and access checks.
 - Expand unit/E2E tests for performance and notifications workflows.

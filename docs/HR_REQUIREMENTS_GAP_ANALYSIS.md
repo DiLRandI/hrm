@@ -22,14 +22,9 @@ It separates closed gaps (already implemented) from active gaps (still requiring
 | C-4 | Structured payload validation inconsistent | Closed | Shared validation usage across auth/leave/payroll/gdpr handlers in `internal/transport/http/shared/validation.go` and handler files |
 | C-5 | Leave half-day/doc workflow incomplete | Closed | `startHalf`/`endHalf` + multipart document support in `internal/transport/http/handlers/leave/handlers.go` with migration `migrations/0007_leave_request_documents.sql` |
 | C-6 | Job-runs monitoring query reliability issue | Closed | Dynamic filter-safe query building in `internal/domain/reports/store.go` |
+| C-7 | Manager-history tenant/role scoping hardening | Closed | Tenant-bound query + role-aware access enforcement in `internal/domain/core/store.go` and `internal/transport/http/handlers/core/handlers.go` |
 
 ## 3) Active gaps (prioritized)
-
-### P0: High-priority correctness/security
-
-| ID | Active gap | Current observation | Impact |
-|---|---|---|---|
-| P0-1 | Manager-history tenant/role scoping hardening | `GET /employees/{employeeID}/manager-history` fetch path currently calls `ManagerHistory` with only `employeeID`; store query is not tenant-bound and handler does not apply self/manager visibility checks (`internal/transport/http/handlers/core/handlers.go`, `internal/domain/core/store.go`) | Potential privacy data exposure across unintended employee records |
 
 ### P1: Functional breadth (not yet implemented)
 
@@ -53,9 +48,8 @@ It separates closed gaps (already implemented) from active gaps (still requiring
 | P2-3 | Deep E2E coverage for critical workflows | E2E remains smoke-level; deeper multi-role payroll/compliance journeys are limited |
 
 ## 4) Recommended next implementation wave
-1. Close P0-1 manager-history scoping (tenant-bound query + access policy checks + regression tests).
-2. Expand E2E depth for payroll, leave approvals, GDPR exports, and notifications.
-3. Select one P1 capability group (time & attendance or onboarding/offboarding) for next roadmap slice.
+1. Expand E2E depth for payroll, leave approvals, GDPR exports, and notifications.
+2. Select one P1 capability group (time & attendance or onboarding/offboarding) for next roadmap slice.
 
 ## 5) Source of truth docs
 - API: `docs/API.md`

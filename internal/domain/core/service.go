@@ -54,8 +54,8 @@ func (s *Service) OrgChartNodes(ctx context.Context, tenantID, employeeID string
 	return s.store.OrgChartNodes(ctx, tenantID, employeeID)
 }
 
-func (s *Service) ManagerHistory(ctx context.Context, employeeID string) ([]map[string]any, error) {
-	return s.store.ManagerHistory(ctx, employeeID)
+func (s *Service) ManagerHistory(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error) {
+	return s.store.ManagerHistory(ctx, tenantID, employeeID)
 }
 
 func (s *Service) ListPermissions(ctx context.Context) ([]map[string]string, error) {
@@ -110,8 +110,36 @@ func (s *Service) CreateEmployee(ctx context.Context, tenantID string, emp Emplo
 	return s.store.CreateEmployee(ctx, tenantID, emp)
 }
 
-func (s *Service) CreateEmployeeWithUser(ctx context.Context, tenantID string, emp Employee, password string) (string, string, error) {
-	return s.store.CreateEmployeeWithUser(ctx, tenantID, emp, password)
+func (s *Service) RoleIDByName(ctx context.Context, tenantID, roleName string) (string, error) {
+	return s.store.RoleIDByName(ctx, tenantID, roleName)
+}
+
+func (s *Service) GetUser(ctx context.Context, tenantID, userID string) (*UserAccount, error) {
+	return s.store.GetUser(ctx, tenantID, userID)
+}
+
+func (s *Service) ListUsers(ctx context.Context, tenantID string, limit, offset int) ([]UserAccount, error) {
+	return s.store.ListUsers(ctx, tenantID, limit, offset)
+}
+
+func (s *Service) CountUsers(ctx context.Context, tenantID string) (int, error) {
+	return s.store.CountUsers(ctx, tenantID)
+}
+
+func (s *Service) CreateUser(ctx context.Context, tenantID, email, password, roleName, status string) (string, error) {
+	return s.store.CreateUser(ctx, tenantID, email, password, roleName, status)
+}
+
+func (s *Service) CreateUserWithEmployee(ctx context.Context, tenantID, email, password, roleName, status string, emp *Employee) (string, string, error) {
+	return s.store.CreateUserWithEmployee(ctx, tenantID, email, password, roleName, status, emp)
+}
+
+func (s *Service) UpdateUserRole(ctx context.Context, tenantID, userID, roleName string) error {
+	return s.store.UpdateUserRole(ctx, tenantID, userID, roleName)
+}
+
+func (s *Service) UpdateUserStatus(ctx context.Context, tenantID, userID, status string) error {
+	return s.store.UpdateUserStatus(ctx, tenantID, userID, status)
 }
 
 func (s *Service) UpdateEmployee(ctx context.Context, tenantID, employeeID string, emp Employee) error {

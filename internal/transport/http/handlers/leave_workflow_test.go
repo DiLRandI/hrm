@@ -35,13 +35,11 @@ func TestLeaveRequestRequiresDocumentAndSupportsHalfDay(t *testing.T) {
 	client := ts.Client()
 
 	adminToken := login(t, client, ts.URL, cfg.SeedAdminEmail, cfg.SeedAdminPassword)
-	tenantID := getTenantID(t, app, cfg.SeedTenantName)
 
 	employeeEmail := fmt.Sprintf("leave-doc-%d@example.com", time.Now().UnixNano())
-	employeePassword := "Employee123!"
-	employeeUserID := createUserWithRole(t, app, tenantID, auth.RoleEmployee, employeeEmail, employeePassword)
-	employeeID := createEmployeeWithUser(t, client, ts.URL, adminToken, employeeUserID, "", employeeEmail)
-	employeeToken := login(t, client, ts.URL, employeeEmail, employeePassword)
+	employeeAccount := createUserAccountWithEmployee(t, client, ts.URL, adminToken, auth.RoleEmployee, employeeEmail, "")
+	employeeID := employeeAccount.EmployeeID
+	employeeToken := login(t, client, ts.URL, employeeEmail, employeeAccount.TempPassword)
 
 	leaveTypeID := createLeaveTypeWithDocRequirement(t, client, ts.URL, adminToken, true)
 
@@ -163,13 +161,10 @@ func TestLeaveRequestRejectsInvalidSingleDayHalfDayCombination(t *testing.T) {
 	client := ts.Client()
 
 	adminToken := login(t, client, ts.URL, cfg.SeedAdminEmail, cfg.SeedAdminPassword)
-	tenantID := getTenantID(t, app, cfg.SeedTenantName)
 
 	employeeEmail := fmt.Sprintf("leave-half-%d@example.com", time.Now().UnixNano())
-	employeePassword := "Employee123!"
-	employeeUserID := createUserWithRole(t, app, tenantID, auth.RoleEmployee, employeeEmail, employeePassword)
-	_ = createEmployeeWithUser(t, client, ts.URL, adminToken, employeeUserID, "", employeeEmail)
-	employeeToken := login(t, client, ts.URL, employeeEmail, employeePassword)
+	employeeAccount := createUserAccountWithEmployee(t, client, ts.URL, adminToken, auth.RoleEmployee, employeeEmail, "")
+	employeeToken := login(t, client, ts.URL, employeeEmail, employeeAccount.TempPassword)
 
 	leaveTypeID := createLeaveTypeWithDocRequirement(t, client, ts.URL, adminToken, false)
 

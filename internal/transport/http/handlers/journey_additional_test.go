@@ -33,23 +33,19 @@ func TestPerformanceReviewJourney(t *testing.T) {
 
 	client := ts.Client()
 	adminToken := login(t, client, ts.URL, cfg.SeedAdminEmail, cfg.SeedAdminPassword)
-
-	tenantID := getTenantID(t, app, cfg.SeedTenantName)
+	systemAdminToken := login(t, client, ts.URL, cfg.SeedSystemAdminEmail, cfg.SeedSystemAdminPassword)
 
 	managerEmail := fmt.Sprintf("manager-perf-%d@example.com", time.Now().UnixNano())
-	managerPassword := "Manager123!"
-	managerUserID := createUserWithRole(t, app, tenantID, auth.RoleManager, managerEmail, managerPassword)
-	managerEmployeeID := createEmployeeWithUser(t, client, ts.URL, adminToken, managerUserID, "", managerEmail)
+	managerAccount := createUserAccountWithEmployee(t, client, ts.URL, systemAdminToken, auth.RoleManager, managerEmail, "")
 
 	employeeEmail := fmt.Sprintf("employee-perf-%d@example.com", time.Now().UnixNano())
-	employeePassword := "Employee123!"
-	employeeUserID := createUserWithRole(t, app, tenantID, auth.RoleEmployee, employeeEmail, employeePassword)
-	employeeID := createEmployeeWithUser(t, client, ts.URL, adminToken, employeeUserID, managerEmployeeID, employeeEmail)
+	employeeAccount := createUserAccountWithEmployee(t, client, ts.URL, adminToken, auth.RoleEmployee, employeeEmail, managerAccount.EmployeeID)
+	employeeID := employeeAccount.EmployeeID
 
 	templateID := createReviewTemplate(t, client, ts.URL, adminToken)
 	cycleID := createReviewCycle(t, client, ts.URL, adminToken, templateID)
 
-	employeeToken := login(t, client, ts.URL, employeeEmail, employeePassword)
+	employeeToken := login(t, client, ts.URL, employeeEmail, employeeAccount.TempPassword)
 	employeeTasks := listReviewTasks(t, client, ts.URL, employeeToken)
 	if len(employeeTasks) == 0 {
 		t.Fatal("expected employee review tasks")
@@ -57,7 +53,7 @@ func TestPerformanceReviewJourney(t *testing.T) {
 	taskID := employeeTasks[0]["id"].(string)
 	submitReviewResponse(t, client, ts.URL, employeeToken, taskID, "self")
 
-	managerToken := login(t, client, ts.URL, managerEmail, managerPassword)
+	managerToken := login(t, client, ts.URL, managerEmail, managerAccount.TempPassword)
 	managerTasks := listReviewTasks(t, client, ts.URL, managerToken)
 	managerTaskID := findTaskForEmployee(managerTasks, employeeID)
 	if managerTaskID == "" {
@@ -97,11 +93,9 @@ func TestGDPRRetentionAndDSARJourney(t *testing.T) {
 	client := ts.Client()
 	adminToken := login(t, client, ts.URL, cfg.SeedAdminEmail, cfg.SeedAdminPassword)
 
-	tenantID := getTenantID(t, app, cfg.SeedTenantName)
 	employeeEmail := fmt.Sprintf("gdpr-employee-%d@example.com", time.Now().UnixNano())
-	employeePassword := "Employee123!"
-	employeeUserID := createUserWithRole(t, app, tenantID, auth.RoleEmployee, employeeEmail, employeePassword)
-	employeeID := createEmployeeWithUser(t, client, ts.URL, adminToken, employeeUserID, "", employeeEmail)
+	employeeAccount := createUserAccountWithEmployee(t, client, ts.URL, adminToken, auth.RoleEmployee, employeeEmail, "")
+	employeeID := employeeAccount.EmployeeID
 
 	createRetentionPolicy(t, client, ts.URL, adminToken)
 	runSummaries := runRetention(t, client, ts.URL, adminToken)
@@ -125,19 +119,21 @@ func TestGDPRRetentionAndDSARJourney(t *testing.T) {
 
 func testConfig(dbURL string) config.Config {
 	return config.Config{
-		DatabaseURL:        dbURL,
-		JWTSecret:          "test-secret",
-		DataEncryptionKey:  "0123456789abcdef0123456789abcdef",
-		FrontendDir:        "frontend/dist",
-		Environment:        "test",
-		SeedTenantName:     "Test Tenant",
-		SeedAdminEmail:     "admin@test.local",
-		SeedAdminPassword:  "ChangeMe123!",
-		EmailFrom:          "no-reply@test.local",
-		RunMigrations:      true,
-		RunSeed:            true,
-		MaxBodyBytes:       1048576,
-		RateLimitPerMinute: 1000,
+		DatabaseURL:             dbURL,
+		JWTSecret:               "test-secret",
+		DataEncryptionKey:       "0123456789abcdef0123456789abcdef",
+		FrontendDir:             "frontend/dist",
+		Environment:             "test",
+		SeedTenantName:          "Test Tenant",
+		SeedAdminEmail:          "admin@test.local",
+		SeedAdminPassword:       "ChangeMe123!",
+		SeedSystemAdminEmail:    "sysadmin@test.local",
+		SeedSystemAdminPassword: "ChangeMe123!",
+		EmailFrom:               "no-reply@test.local",
+		RunMigrations:           true,
+		RunSeed:                 true,
+		MaxBodyBytes:            1048576,
+		RateLimitPerMinute:      1000,
 	}
 }
 
@@ -151,32 +147,15 @@ func getTenantID(t *testing.T, app *server.App, tenantName string) string {
 	return tenantID
 }
 
-func createUserWithRole(t *testing.T, app *server.App, tenantID, roleName, email, password string) string {
-	t.Helper()
-	ctx := context.Background()
-	var roleID string
-	if err := app.DB.QueryRow(ctx, "SELECT id FROM roles WHERE tenant_id = $1 AND name = $2", tenantID, roleName).Scan(&roleID); err != nil {
-		t.Fatalf("failed to load role: %v", err)
-	}
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		t.Fatalf("failed to hash password: %v", err)
-	}
-	var userID string
-	if err := app.DB.QueryRow(ctx, `
-    INSERT INTO users (tenant_id, email, password_hash, role_id)
-    VALUES ($1,$2,$3,$4)
-    RETURNING id
-  `, tenantID, email, hash, roleID).Scan(&userID); err != nil {
-		t.Fatalf("failed to create user: %v", err)
-	}
-	return userID
+type createdUserAccount struct {
+	UserID       string
+	EmployeeID   string
+	TempPassword string
 }
 
-func createEmployeeWithUser(t *testing.T, client *http.Client, baseURL, token, userID, managerID, email string) string {
+func createUserAccountWithEmployee(t *testing.T, client *http.Client, baseURL, token, roleName, email, managerID string) createdUserAccount {
 	t.Helper()
-	payload := map[string]any{
-		"userId":         userID,
+	employee := map[string]any{
 		"firstName":      "Journey",
 		"lastName":       "Tester",
 		"email":          email,
@@ -186,18 +165,35 @@ func createEmployeeWithUser(t *testing.T, client *http.Client, baseURL, token, u
 		"employmentType": "full_time",
 	}
 	if managerID != "" {
-		payload["managerId"] = managerID
+		employee["managerId"] = managerID
 	}
-	resp := postJSON(t, client, baseURL+"/api/v1/employees", token, payload)
+	resp := postJSON(t, client, baseURL+"/api/v1/users", token, map[string]any{
+		"email":    email,
+		"role":     roleName,
+		"status":   "active",
+		"employee": employee,
+	})
 	var data map[string]any
 	if err := json.Unmarshal(resp.Data, &data); err != nil {
-		t.Fatalf("failed to decode employee response: %v", err)
+		t.Fatalf("failed to decode user response: %v", err)
 	}
-	id, _ := data["id"].(string)
-	if id == "" {
+	userID, _ := data["id"].(string)
+	if userID == "" {
+		t.Fatal("expected user id")
+	}
+	employeeID, _ := data["employeeId"].(string)
+	if employeeID == "" {
 		t.Fatal("expected employee id")
 	}
-	return id
+	tempPassword, _ := data["tempPassword"].(string)
+	if tempPassword == "" {
+		t.Fatal("expected temporary password")
+	}
+	return createdUserAccount{
+		UserID:       userID,
+		EmployeeID:   employeeID,
+		TempPassword: tempPassword,
+	}
 }
 
 func createReviewTemplate(t *testing.T, client *http.Client, baseURL, token string) string {

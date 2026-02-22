@@ -2,7 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from '../../../services/apiClient.js';
 import { useAuth } from '../../auth/auth.jsx';
-import { ROLE_HR } from '../../../shared/constants/roles.js';
+import { ROLE_EMPLOYEE, ROLE_HR, ROLE_HR_MANAGER } from '../../../shared/constants/roles.js';
 import { EMPLOYEE_STATUS_ACTIVE } from '../../../shared/constants/statuses.js';
 import { getRole } from '../../../shared/utils/role.js';
 import { useApiQuery } from '../../../shared/hooks/useApiQuery.js';
@@ -19,7 +19,8 @@ const EMPLOYEE_LIMIT = 25;
 
 export default function Employees() {
   const { user } = useAuth();
-  const isHR = getRole(user) === ROLE_HR;
+  const role = getRole(user);
+  const isHR = role === ROLE_HR || role === ROLE_HR_MANAGER;
   const location = useLocation();
   const activeSection = useMemo(() => {
     const segment = location.pathname.split('/')[2];
@@ -240,11 +241,16 @@ export default function Employees() {
     e.preventDefault();
     setActionError('');
     try {
-      const result = await api.post('/employees', {
-        firstName: form.firstName,
-        lastName: form.lastName,
+      const result = await api.post('/users', {
         email: form.email,
+        role: ROLE_EMPLOYEE,
         status: EMPLOYEE_STATUS_ACTIVE,
+        employee: {
+          firstName: form.firstName,
+          lastName: form.lastName,
+          email: form.email,
+          status: EMPLOYEE_STATUS_ACTIVE,
+        },
       });
       if (result?.tempPassword) {
         setTempCredentials({ email: form.email, password: result.tempPassword });

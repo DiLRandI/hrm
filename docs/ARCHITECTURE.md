@@ -52,6 +52,7 @@ API-scoped middleware adds:
 - role-aware field filtering for sensitive employee data
 - audit events and GDPR access-log recording for sensitive operations
 - idempotency enforcement for compliance-critical mutations (for example payroll finalization)
+- hierarchical role provisioning controls (`SystemAdmin` -> `HR`/`HRManager`/`Manager`, `HRManager` -> `HR`/`Employee`, `HR` -> `Employee`)
 
 ## Observability
 - JSON structured logs

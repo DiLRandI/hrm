@@ -14,7 +14,7 @@ import Reports from '../features/reports/pages/Reports.jsx';
 import Notifications from '../features/notifications/pages/Notifications.jsx';
 import Audit from '../features/audit/pages/Audit.jsx';
 import Profile from '../features/profile/pages/Profile.jsx';
-import { ROLE_HR } from '../shared/constants/roles.js';
+import { ROLE_HR, ROLE_HR_MANAGER } from '../shared/constants/roles.js';
 import RequireRole from './RequireRole.jsx';
 import { ToastProvider } from '../shared/components/ToastProvider.jsx';
 import { getRole } from '../shared/utils/role.js';
@@ -48,7 +48,7 @@ function AppShell() {
           <NavLink to="/reports">Reports</NavLink>
           <NavLink to="/notifications">Notifications</NavLink>
           <NavLink to="/profile">Profile</NavLink>
-          {role === ROLE_HR && <NavLink to="/audit">Audit</NavLink>}
+          {(role === ROLE_HR || role === ROLE_HR_MANAGER) && <NavLink to="/audit">Audit</NavLink>}
         </nav>
         <button className="ghost" onClick={logout}>Log out</button>
       </aside>
@@ -67,7 +67,7 @@ function AppShell() {
             <Route
               path="/audit"
               element={
-                <RequireRole allowed={[ROLE_HR]}>
+                <RequireRole allowed={[ROLE_HR, ROLE_HR_MANAGER]}>
                   <Audit />
                 </RequireRole>
               }

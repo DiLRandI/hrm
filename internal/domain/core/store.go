@@ -218,11 +218,140 @@ func (s *Store) ListEmployees(ctx context.Context, tenantID string) ([]Employee,
 	return out, nil
 }
 
-func (s *Store) CreateEmployee(ctx context.Context, tenantID string, emp Employee) (string, error) {
-	return s.createEmployee(ctx, s.DB, tenantID, emp, emp.UserID)
+func (s *Store) RoleIDByName(ctx context.Context, tenantID, roleName string) (string, error) {
+	var roleID string
+	if err := s.DB.QueryRow(ctx, `
+    SELECT id
+    FROM roles
+    WHERE tenant_id = $1 AND name = $2
+  `, tenantID, roleName).Scan(&roleID); err != nil {
+		return "", err
+	}
+	return roleID, nil
 }
 
-func (s *Store) CreateEmployeeWithUser(ctx context.Context, tenantID string, emp Employee, password string) (string, string, error) {
+func (s *Store) GetUser(ctx context.Context, tenantID, userID string) (*UserAccount, error) {
+	row := s.DB.QueryRow(ctx, `
+    SELECT u.id,
+           u.tenant_id::text,
+           u.email,
+           u.role_id::text,
+           r.name,
+           u.status,
+           COALESCE(e.id::text, ''),
+           u.last_login,
+           u.created_at,
+           u.updated_at
+    FROM users u
+    JOIN roles r ON r.id = u.role_id
+    LEFT JOIN employees e ON e.tenant_id = u.tenant_id AND e.user_id = u.id
+    WHERE u.tenant_id = $1 AND u.id = $2
+  `, tenantID, userID)
+
+	var out UserAccount
+	if err := row.Scan(
+		&out.ID,
+		&out.TenantID,
+		&out.Email,
+		&out.RoleID,
+		&out.RoleName,
+		&out.Status,
+		&out.EmployeeID,
+		&out.LastLogin,
+		&out.CreatedAt,
+		&out.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (s *Store) ListUsers(ctx context.Context, tenantID string, limit, offset int) ([]UserAccount, error) {
+	rows, err := s.DB.Query(ctx, `
+    SELECT u.id,
+           u.tenant_id::text,
+           u.email,
+           u.role_id::text,
+           r.name,
+           u.status,
+           COALESCE(e.id::text, ''),
+           u.last_login,
+           u.created_at,
+           u.updated_at
+    FROM users u
+    JOIN roles r ON r.id = u.role_id
+    LEFT JOIN employees e ON e.tenant_id = u.tenant_id AND e.user_id = u.id
+    WHERE u.tenant_id = $1
+    ORDER BY u.created_at DESC
+    LIMIT $2 OFFSET $3
+  `, tenantID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := make([]UserAccount, 0, limit)
+	for rows.Next() {
+		var entry UserAccount
+		if err := rows.Scan(
+			&entry.ID,
+			&entry.TenantID,
+			&entry.Email,
+			&entry.RoleID,
+			&entry.RoleName,
+			&entry.Status,
+			&entry.EmployeeID,
+			&entry.LastLogin,
+			&entry.CreatedAt,
+			&entry.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		users = append(users, entry)
+	}
+	return users, nil
+}
+
+func (s *Store) CountUsers(ctx context.Context, tenantID string) (int, error) {
+	var total int
+	if err := s.DB.QueryRow(ctx, `
+    SELECT COUNT(1)
+    FROM users
+    WHERE tenant_id = $1
+  `, tenantID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (s *Store) CreateUser(ctx context.Context, tenantID, email, password, roleName, status string) (string, error) {
+	if status == "" {
+		status = UserStatusActive
+	}
+	roleID, err := s.RoleIDByName(ctx, tenantID, roleName)
+	if err != nil {
+		return "", err
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return "", err
+	}
+	var userID string
+	if err := s.DB.QueryRow(ctx, `
+    INSERT INTO users (tenant_id, email, password_hash, role_id, status)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id
+  `, tenantID, email, hash, roleID, status).Scan(&userID); err != nil {
+		return "", err
+	}
+	return userID, nil
+}
+
+func (s *Store) CreateUserWithEmployee(ctx context.Context, tenantID, email, password, roleName, status string, emp *Employee) (string, string, error) {
+	if status == "" {
+		status = UserStatusActive
+	}
+
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return "", "", err
@@ -230,7 +359,11 @@ func (s *Store) CreateEmployeeWithUser(ctx context.Context, tenantID string, emp
 	defer tx.Rollback(ctx)
 
 	var roleID string
-	if err := tx.QueryRow(ctx, "SELECT id FROM roles WHERE tenant_id = $1 AND name = $2", tenantID, auth.RoleEmployee).Scan(&roleID); err != nil {
+	if err := tx.QueryRow(ctx, `
+    SELECT id
+    FROM roles
+    WHERE tenant_id = $1 AND name = $2
+  `, tenantID, roleName).Scan(&roleID); err != nil {
 		return "", "", err
 	}
 
@@ -241,23 +374,35 @@ func (s *Store) CreateEmployeeWithUser(ctx context.Context, tenantID string, emp
 
 	var userID string
 	if err := tx.QueryRow(ctx, `
-    INSERT INTO users (tenant_id, email, password_hash, role_id)
-    VALUES ($1, $2, $3, $4)
+    INSERT INTO users (tenant_id, email, password_hash, role_id, status)
+    VALUES ($1, $2, $3, $4, $5)
     RETURNING id
-  `, tenantID, emp.Email, hash, roleID).Scan(&userID); err != nil {
+  `, tenantID, email, hash, roleID, status).Scan(&userID); err != nil {
 		return "", "", err
 	}
 
-	employeeID, err := s.createEmployee(ctx, tx, tenantID, emp, userID)
-	if err != nil {
-		return "", "", err
+	var employeeID string
+	if emp != nil {
+		if emp.Email == "" {
+			emp.Email = email
+		}
+		if emp.Status == "" {
+			emp.Status = EmployeeStatusActive
+		}
+		employeeID, err = s.createEmployee(ctx, tx, tenantID, *emp, userID)
+		if err != nil {
+			return "", "", err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return "", "", err
 	}
+	return userID, employeeID, nil
+}
 
-	return employeeID, userID, nil
+func (s *Store) CreateEmployee(ctx context.Context, tenantID string, emp Employee) (string, error) {
+	return s.createEmployee(ctx, s.DB, tenantID, emp, emp.UserID)
 }
 
 func (s *Store) createEmployee(ctx context.Context, q rowQuerier, tenantID string, emp Employee, userID string) (string, error) {
@@ -499,14 +644,15 @@ func (s *Store) OrgChartNodes(ctx context.Context, tenantID, employeeID string) 
 	return nodes, nil
 }
 
-func (s *Store) ManagerHistory(ctx context.Context, employeeID string) ([]map[string]any, error) {
+func (s *Store) ManagerHistory(ctx context.Context, tenantID, employeeID string) ([]map[string]any, error) {
 	rows, err := s.DB.Query(ctx, `
     SELECT mr.manager_id, COALESCE(m.first_name,''), COALESCE(m.last_name,''), mr.start_date, mr.end_date
     FROM manager_relations mr
-    LEFT JOIN employees m ON mr.manager_id = m.id
-    WHERE mr.employee_id = $1
+    JOIN employees e ON mr.employee_id = e.id
+    LEFT JOIN employees m ON mr.manager_id = m.id AND m.tenant_id = e.tenant_id
+    WHERE e.tenant_id = $1 AND mr.employee_id = $2
     ORDER BY mr.start_date DESC
-  `, employeeID)
+  `, tenantID, employeeID)
 	if err != nil {
 		return nil, err
 	}
@@ -624,6 +770,40 @@ func (s *Store) UpdateRolePermissions(ctx context.Context, roleID string, permis
 
 	if err := tx.Commit(ctx); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (s *Store) UpdateUserRole(ctx context.Context, tenantID, userID, roleName string) error {
+	roleID, err := s.RoleIDByName(ctx, tenantID, roleName)
+	if err != nil {
+		return err
+	}
+	cmd, err := s.DB.Exec(ctx, `
+    UPDATE users
+    SET role_id = $1, updated_at = now()
+    WHERE tenant_id = $2 AND id = $3
+  `, roleID, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return errors.New("user not found")
+	}
+	return nil
+}
+
+func (s *Store) UpdateUserStatus(ctx context.Context, tenantID, userID, status string) error {
+	cmd, err := s.DB.Exec(ctx, `
+    UPDATE users
+    SET status = $1, updated_at = now()
+    WHERE tenant_id = $2 AND id = $3
+  `, status, tenantID, userID)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return errors.New("user not found")
 	}
 	return nil
 }

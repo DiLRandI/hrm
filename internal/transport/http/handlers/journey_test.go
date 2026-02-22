@@ -29,19 +29,21 @@ func TestHRLeaveAndPayrollJourney(t *testing.T) {
 	}
 
 	cfg := config.Config{
-		DatabaseURL:        dbURL,
-		JWTSecret:          "test-secret",
-		DataEncryptionKey:  "0123456789abcdef0123456789abcdef",
-		FrontendDir:        "frontend/dist",
-		Environment:        "test",
-		SeedTenantName:     "Test Tenant",
-		SeedAdminEmail:     "admin@test.local",
-		SeedAdminPassword:  "ChangeMe123!",
-		EmailFrom:          "no-reply@test.local",
-		RunMigrations:      true,
-		RunSeed:            true,
-		MaxBodyBytes:       1048576,
-		RateLimitPerMinute: 1000,
+		DatabaseURL:             dbURL,
+		JWTSecret:               "test-secret",
+		DataEncryptionKey:       "0123456789abcdef0123456789abcdef",
+		FrontendDir:             "frontend/dist",
+		Environment:             "test",
+		SeedTenantName:          "Test Tenant",
+		SeedAdminEmail:          "admin@test.local",
+		SeedAdminPassword:       "ChangeMe123!",
+		SeedSystemAdminEmail:    "sysadmin@test.local",
+		SeedSystemAdminPassword: "ChangeMe123!",
+		EmailFrom:               "no-reply@test.local",
+		RunMigrations:           true,
+		RunSeed:                 true,
+		MaxBodyBytes:            1048576,
+		RateLimitPerMinute:      1000,
 	}
 
 	app, err := server.New(context.Background(), cfg)
@@ -99,19 +101,21 @@ func TestManagerCannotAccessOtherEmployeeBalances(t *testing.T) {
 	}
 
 	cfg := config.Config{
-		DatabaseURL:        dbURL,
-		JWTSecret:          "test-secret",
-		DataEncryptionKey:  "0123456789abcdef0123456789abcdef",
-		FrontendDir:        "frontend/dist",
-		Environment:        "test",
-		SeedTenantName:     "Test Tenant",
-		SeedAdminEmail:     "admin@test.local",
-		SeedAdminPassword:  "ChangeMe123!",
-		EmailFrom:          "no-reply@test.local",
-		RunMigrations:      true,
-		RunSeed:            true,
-		MaxBodyBytes:       1048576,
-		RateLimitPerMinute: 1000,
+		DatabaseURL:             dbURL,
+		JWTSecret:               "test-secret",
+		DataEncryptionKey:       "0123456789abcdef0123456789abcdef",
+		FrontendDir:             "frontend/dist",
+		Environment:             "test",
+		SeedTenantName:          "Test Tenant",
+		SeedAdminEmail:          "admin@test.local",
+		SeedAdminPassword:       "ChangeMe123!",
+		SeedSystemAdminEmail:    "sysadmin@test.local",
+		SeedSystemAdminPassword: "ChangeMe123!",
+		EmailFrom:               "no-reply@test.local",
+		RunMigrations:           true,
+		RunSeed:                 true,
+		MaxBodyBytes:            1048576,
+		RateLimitPerMinute:      1000,
 	}
 
 	app, err := server.New(context.Background(), cfg)
@@ -192,24 +196,29 @@ func login(t *testing.T, client *http.Client, baseURL, email, password string) s
 
 func createEmployee(t *testing.T, client *http.Client, baseURL, token, email string) string {
 	t.Helper()
-	resp := postJSON(t, client, baseURL+"/api/v1/employees", token, map[string]any{
-		"firstName":      "Journey",
-		"lastName":       "Tester",
-		"email":          email,
-		"status":         "active",
-		"salary":         3500,
-		"currency":       "USD",
-		"employmentType": "full_time",
+	resp := postJSON(t, client, baseURL+"/api/v1/users", token, map[string]any{
+		"email":  email,
+		"role":   auth.RoleEmployee,
+		"status": "active",
+		"employee": map[string]any{
+			"firstName":      "Journey",
+			"lastName":       "Tester",
+			"email":          email,
+			"status":         "active",
+			"salary":         3500,
+			"currency":       "USD",
+			"employmentType": "full_time",
+		},
 	})
 	var payload map[string]any
 	if err := json.Unmarshal(resp.Data, &payload); err != nil {
-		t.Fatalf("failed to decode employee response: %v", err)
+		t.Fatalf("failed to decode user response: %v", err)
 	}
-	id, _ := payload["id"].(string)
-	if id == "" {
+	employeeID, _ := payload["employeeId"].(string)
+	if employeeID == "" {
 		t.Fatal("expected employee id")
 	}
-	return id
+	return employeeID
 }
 
 func createLeaveType(t *testing.T, client *http.Client, baseURL, token string) string {

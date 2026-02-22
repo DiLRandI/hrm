@@ -43,6 +43,19 @@ type EmergencyContact struct {
 	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
+type UserAccount struct {
+	ID         string     `json:"id"`
+	TenantID   string     `json:"tenantId"`
+	Email      string     `json:"email"`
+	RoleID     string     `json:"roleId"`
+	RoleName   string     `json:"role"`
+	Status     string     `json:"status"`
+	EmployeeID string     `json:"employeeId,omitempty"`
+	LastLogin  *time.Time `json:"lastLogin,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
+}
+
 type Department struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`

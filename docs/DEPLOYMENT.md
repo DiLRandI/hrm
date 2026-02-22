@@ -31,10 +31,10 @@ docker compose up --build
 - `RUN_MIGRATIONS` (default `true`)
 - `RUN_SEED` (default `true`)
 - `SEED_TENANT_NAME` (default `Default Tenant`)
-- `SEED_ADMIN_EMAIL`
-- `SEED_ADMIN_PASSWORD`
-- `SEED_SYSTEM_ADMIN_EMAIL`
-- `SEED_SYSTEM_ADMIN_PASSWORD`
+- `SEED_SYSTEM_ADMIN_EMAIL` (required for fresh bootstrap when no `SystemAdmin` exists yet)
+- `SEED_SYSTEM_ADMIN_PASSWORD` (required for fresh bootstrap when no `SystemAdmin` exists yet)
+- `SEED_ADMIN_EMAIL` (optional initial `HR` user)
+- `SEED_ADMIN_PASSWORD` (optional initial `HR` user)
 
 ### API protection and jobs
 - `MAX_BODY_BYTES` (default `1048576`)
@@ -55,6 +55,10 @@ docker compose up --build
 
 ### Reserved/not currently active in behavior
 - `ALLOW_SELF_SIGNUP` is loaded by config but currently not used by any active auth/signup route.
+
+## Role Provisioning Model
+- Bootstrap seed ensures role catalog: `SystemAdmin`, `HR`, `HRManager`, `Manager`, `Employee`.
+- Ongoing user provisioning is API-driven (`/api/v1/users`) with role-creation policy checks.
 
 ## Kubernetes Notes
 

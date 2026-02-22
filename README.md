@@ -9,8 +9,8 @@ make dev
 ```
 
 Default seeded users (when `RUN_SEED=true`):
-- HR admin: `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`
-- System admin: `SEED_SYSTEM_ADMIN_EMAIL` / `SEED_SYSTEM_ADMIN_PASSWORD`
+- System admin (required for first bootstrap): `SEED_SYSTEM_ADMIN_EMAIL` / `SEED_SYSTEM_ADMIN_PASSWORD`
+- HR admin (optional): `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`
 
 ## Local Development
 

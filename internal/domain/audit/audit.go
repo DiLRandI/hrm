@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -52,10 +53,19 @@ func (s *Service) Record(ctx context.Context, tenantID, actorID, action, entityT
 		afterJSON = payload
 	}
 
+	var actor any
+	if strings.TrimSpace(actorID) != "" {
+		actor = actorID
+	}
+	var entity any
+	if strings.TrimSpace(entityID) != "" {
+		entity = entityID
+	}
+
 	_, err := s.DB.Exec(ctx, `
     INSERT INTO audit_events (tenant_id, actor_user_id, action, entity_type, entity_id, before_json, after_json, request_id, ip)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-  `, tenantID, actorID, action, entityType, entityID, beforeJSON, afterJSON, requestID, ip)
+  `, tenantID, actor, action, entityType, entity, beforeJSON, afterJSON, requestID, ip)
 	return err
 }
 
@@ -69,7 +79,7 @@ func (s *Service) Count(ctx context.Context, tenantID string, filter Filter) (in
 }
 
 func (s *Service) List(ctx context.Context, tenantID string, filter Filter, includeDetails bool, limit, offset int) ([]Event, error) {
-	selectCols := "id, actor_user_id, action, entity_type, entity_id, request_id, ip, created_at"
+	selectCols := "id, COALESCE(actor_user_id::text,''), action, entity_type, COALESCE(entity_id::text,''), request_id, ip, created_at"
 	if includeDetails {
 		selectCols += ", before_json, after_json"
 	}
@@ -104,7 +114,7 @@ func (s *Service) List(ctx context.Context, tenantID string, filter Filter, incl
 
 func (s *Service) ListExport(ctx context.Context, tenantID string) ([]Event, error) {
 	rows, err := s.DB.Query(ctx, `
-    SELECT id, actor_user_id, action, entity_type, entity_id, request_id, ip, created_at
+    SELECT id, COALESCE(actor_user_id::text,''), action, entity_type, COALESCE(entity_id::text,''), request_id, ip, created_at
     FROM audit_events
     WHERE tenant_id = $1
     ORDER BY created_at DESC

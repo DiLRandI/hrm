@@ -23,7 +23,6 @@ Base path: `/api/v1`
 - `PUT /profile/emergency-contacts`
 - `GET /org/chart`
 - `GET /employees`
-- `POST /employees`
 - `GET /employees/{employeeID}`
 - `PUT /employees/{employeeID}`
 - `GET /employees/{employeeID}/emergency-contacts`
@@ -36,6 +35,24 @@ Base path: `/api/v1`
 - `GET /permissions`
 - `GET /roles`
 - `PUT /roles/{roleID}`
+- `GET /users`
+- `POST /users` -> `{ email, role, status?, employee? }`
+- `PUT /users/{userID}/role` -> `{ role }`
+- `PUT /users/{userID}/status` -> `{ status }`
+
+Employee onboarding uses `POST /users` with `role=Employee` and an `employee` payload.
+
+Current role set:
+- `SystemAdmin`
+- `HR`
+- `HRManager`
+- `Manager`
+- `Employee`
+
+Role provisioning policy:
+- `SystemAdmin` can create: `HR`, `HRManager`, `Manager`
+- `HRManager` can create: `HR`, `Employee`
+- `HR` can create: `Employee`
 
 ## Audit
 - `GET /audit/events`

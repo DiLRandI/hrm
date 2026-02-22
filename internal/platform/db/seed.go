@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,14 +31,12 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) error {
 		return err
 	}
 
-	if err := ensureAdminUser(ctx, pool, tenantID, roleIDs[auth.RoleHR], cfg.SeedAdminEmail, cfg.SeedAdminPassword); err != nil {
+	if err := ensureSystemAdmin(ctx, pool, tenantID, roleIDs[auth.RoleSystemAdmin], cfg.SeedSystemAdminEmail, cfg.SeedSystemAdminPassword); err != nil {
 		return err
 	}
 
-	if cfg.SeedSystemAdminEmail != "" {
-		if err := ensureAdminUser(ctx, pool, tenantID, roleIDs[auth.RoleSystemAdmin], cfg.SeedSystemAdminEmail, cfg.SeedSystemAdminPassword); err != nil {
-			return err
-		}
+	if err := ensureAdminUser(ctx, pool, tenantID, roleIDs[auth.RoleHR], cfg.SeedAdminEmail, cfg.SeedAdminPassword); err != nil {
+		return err
 	}
 
 	if err := ensureTenantSettings(ctx, pool, tenantID, cfg.EmailFrom); err != nil {
@@ -45,6 +44,25 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) error {
 	}
 
 	return nil
+}
+
+func ensureSystemAdmin(ctx context.Context, pool *pgxpool.Pool, tenantID, roleID, email, password string) error {
+	var count int
+	if err := pool.QueryRow(ctx, `
+    SELECT COUNT(1)
+    FROM users
+    WHERE tenant_id = $1 AND role_id = $2
+  `, tenantID, roleID).Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	if strings.TrimSpace(email) == "" || strings.TrimSpace(password) == "" {
+		return fmt.Errorf("missing bootstrap system admin credentials: set SEED_SYSTEM_ADMIN_EMAIL and SEED_SYSTEM_ADMIN_PASSWORD or create a SystemAdmin user before running with RUN_SEED=true")
+	}
+	return ensureAdminUser(ctx, pool, tenantID, roleID, email, password)
 }
 
 func ensureTenant(ctx context.Context, pool *pgxpool.Pool, name string) (string, error) {
