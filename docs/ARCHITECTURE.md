@@ -1,38 +1,59 @@
 # Architecture
 
 ## Overview
-Single-container application hosting a Go REST API and a React SPA. PostgreSQL runs separately. The Go server serves `/api/v1/*` endpoints and the React `index.html` for SPA routing.
+The service is a single Go process that:
+- serves REST APIs under `/api/v1`
+- serves the built React SPA for browser routes
+- manages in-process background jobs (leave accrual, GDPR retention, payroll-related job tracking)
 
-## Repository layout (refactored)
+PostgreSQL is a separate service.
+
+## Repository Layout
 
 Backend (Go):
-- `cmd/server`: entrypoint binary.
-- `internal/app`: server wiring and routing.
-- `internal/domain`: business logic + domain models.
-- `internal/platform`: config, database, request context.
-- `internal/transport/http`: HTTP handlers, middleware, API helpers.
+- `cmd/server`: process entrypoint
+- `internal/app`: server wiring, dependency construction, router assembly
+- `internal/domain`: business logic, stores, constants, tests
+- `internal/platform`: config, DB, crypto, email, metrics, jobs, request context
+- `internal/transport/http`: HTTP handlers, middleware, response helpers
 
-Frontend (React):
-- `frontend/src/app`: app shell and routing.
-- `frontend/src/features`: feature modules by domain.
-- `frontend/src/services`: API client and external integrations.
-- `frontend/src/shared`: shared styles and UI helpers.
+Frontend (React + Vite):
+- `frontend/src/app`: app shell, routes, guards
+- `frontend/src/features`: domain features (`auth`, `core`, `leave`, `payroll`, `performance`, `gdpr`, `reports`, `notifications`, `audit`, `profile`)
+- `frontend/src/services`: API client layer
+- `frontend/src/shared`: shared UI/components/hooks/constants/styles
+- `frontend/e2e`: Playwright smoke tests
 
-## Modules
-- Core HR: employees, departments, org structure, RBAC, access logs.
-- Leave: policies, requests, balances, approvals, calendar.
-- Payroll: schedules, inputs, calculation, finalize, payslips.
-- Performance: goals, review cycles/tasks, feedback, check-ins, PIP.
-- GDPR: DSAR export, retention policies, anonymization requests.
+## Domain Modules
+- Auth: login/logout/refresh, password reset flow, MFA setup/enable/disable
+- Core HR: employees, departments, org chart, role/permission administration, emergency contacts
+- Leave: leave types/policies/holidays, requests and approvals, balances/accruals, documents, reports
+- Payroll: schedules/groups/elements/periods, inputs/import, run/finalize/reopen, payslips and exports
+- Performance: goals, reviews/cycles/tasks, feedback, check-ins, PIPs, summary reporting
+- GDPR: retention policies/runs, consent, DSAR export, anonymization, access logs
+- Reports: dashboards and job-runs operational reporting
+- Notifications and audit trails
 
-## Security
-- JWT-based auth with role-based access control.
-- Field-level filtering for sensitive employee fields.
-- Audit-ready access logs and immutable audit event support.
+## Request Pipeline
+Global middleware stack includes:
+- request IDs
+- structured request logging and metrics capture
+- panic recovery
+- security headers
+- JWT auth context loading
 
-## Jobs
-In-process jobs can be added for accruals, retention, and payroll recalculation. The design is queue-ready for future background worker integration.
+API-scoped middleware adds:
+- body size limits
+- sensitive mutation rate limiting
+
+## Security Model
+- JWT auth with permission-based RBAC checks
+- application-level encryption support for sensitive fields (`DATA_ENCRYPTION_KEY`)
+- role-aware field filtering for sensitive employee data
+- audit events and GDPR access-log recording for sensitive operations
+- idempotency enforcement for compliance-critical mutations (for example payroll finalization)
 
 ## Observability
-- Request IDs in logs plus JSON logging.
-- Optional metrics endpoint for basic latency/error/job counters.
+- JSON structured logs
+- readiness (`/readyz`) and liveness (`/healthz`) endpoints
+- optional `/metrics` endpoint with request and job counters

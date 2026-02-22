@@ -36,7 +36,7 @@ type StoreAPI interface {
 	UpdateBalanceOnReject(ctx context.Context, tenantID, employeeID, leaveTypeID string, days float64) error
 	EmployeeUserAndLeaveType(ctx context.Context, tenantID, leaveTypeID, employeeID string) (string, string, error)
 	CalendarEntries(ctx context.Context, tenantID string, statuses []string, employeeID string) ([]CalendarEntry, error)
-	CalendarExportRows(ctx context.Context, tenantID string, statuses []string, employeeID string, managerID string) ([]CalendarExportRow, error)
+	CalendarExportRows(ctx context.Context, tenantID string, statuses []string, employeeID, managerID string) ([]CalendarExportRow, error)
 	ReportBalances(ctx context.Context, tenantID string) ([]map[string]any, error)
 	ReportUsage(ctx context.Context, tenantID string) ([]map[string]any, error)
 }

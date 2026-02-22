@@ -230,13 +230,15 @@ func (h *Handler) handleCreateEmployee(w http.ResponseWriter, r *http.Request) {
 	api.Created(w, map[string]string{"id": id, "tempPassword": tempPassword}, middleware.GetRequestID(r.Context()))
 }
 
-const tempPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
-const tempPasswordLength = 12
+const (
+	tempPasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+	tempPasswordLength   = 12
+)
 
 func generateTempPassword() (string, error) {
 	out := make([]byte, tempPasswordLength)
 	max := big.NewInt(int64(len(tempPasswordAlphabet)))
-	for i := 0; i < tempPasswordLength; i++ {
+	for i := range tempPasswordLength {
 		n, err := rand.Int(rand.Reader, max)
 		if err != nil {
 			return "", err

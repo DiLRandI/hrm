@@ -541,7 +541,7 @@ func (s *Store) CalendarEntries(ctx context.Context, tenantID string, statuses [
 	return out, nil
 }
 
-func (s *Store) CalendarExportRows(ctx context.Context, tenantID string, statuses []string, employeeID string, managerID string) ([]CalendarExportRow, error) {
+func (s *Store) CalendarExportRows(ctx context.Context, tenantID string, statuses []string, employeeID, managerID string) ([]CalendarExportRow, error) {
 	query := `
     SELECT lr.id, lr.employee_id, lt.name, lr.start_date, lr.end_date, lr.status
     FROM leave_requests lr

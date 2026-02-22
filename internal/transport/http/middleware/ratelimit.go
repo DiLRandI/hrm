@@ -263,8 +263,8 @@ func sensitiveRateScope(r *http.Request) sensitiveScope {
 
 func normalizedAPIPath(path string) string {
 	cleaned := strings.TrimSpace(path)
-	if strings.HasPrefix(cleaned, "/api/v1") {
-		cleaned = strings.TrimPrefix(cleaned, "/api/v1")
+	if after, ok := strings.CutPrefix(cleaned, "/api/v1"); ok {
+		cleaned = after
 	}
 	if cleaned == "" {
 		return "/"

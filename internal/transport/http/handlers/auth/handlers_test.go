@@ -39,7 +39,6 @@ func TestValidateResetPassword(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateResetPassword(tc.password)
 			if tc.wantErr && err == nil {
@@ -86,7 +85,6 @@ func TestBuildResetLink(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			got := buildResetLink(tc.baseURL, tc.token)
 			for _, part := range tc.wantParts {

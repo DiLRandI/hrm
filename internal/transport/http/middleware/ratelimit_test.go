@@ -128,7 +128,7 @@ func TestSensitiveMutationRateLimitScope(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/reports/dashboard/hr", nil)
 		req.RemoteAddr = "198.51.100.40:8888"
 		rec := httptest.NewRecorder()
@@ -142,7 +142,7 @@ func TestSensitiveMutationRateLimitScope(t *testing.T) {
 		TenantID: "tenant-1",
 		UserID:   "hr-1",
 	})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/payroll/periods/p1/finalize", nil).WithContext(userCtx)
 		req.RemoteAddr = "198.51.100.41:9999"
 		rec := httptest.NewRecorder()

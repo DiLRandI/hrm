@@ -3,6 +3,7 @@
 Start: 2026-01-17
 
 ## Log
+- 2026-02-22: Refreshed repository documentation for command/API/deployment accuracy; archived completed immediate-priority checklist status; updated current gap analysis to reflect resolved vs active items.
 - 2026-01-17: Initialized project structure and documentation tracking.
 - 2026-01-17: Implemented encryption-at-rest for sensitive fields, MFA, refresh token rotation, audit log export UI, and GDPR consent/retention/anonymization flows with secure downloads.
 - 2026-01-17: Added job scheduler (leave accrual + retention), metrics endpoint, email notification support, and job runs dashboard.
@@ -24,4 +25,5 @@ Start: 2026-01-17
 - Payslip PDFs: render server-side HTML → PDF using a pluggable renderer (default: HTML download if no renderer configured).
 
 ## Pending
+- Strengthen manager-history tenant/role scoping (`GET /employees/{employeeID}/manager-history`) with tenant-bound queries and access checks.
 - Expand unit/E2E tests for performance and notifications workflows.

@@ -74,6 +74,9 @@ test-backend:
 test-frontend:
 	cd $(FRONTEND_DIR) && npm install && npm run test
 
+fmt:
+	gofmt -w ./cmd ./internal
+
 docker-build:
 	docker build -t hrm-app .
 
